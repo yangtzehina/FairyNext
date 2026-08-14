@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.Numerics</RootNamespace>
+    <!-- 承诺 9：核心零依赖纯 C#。数学 shim（M1-02）：API 面按 fork 被移植件的实际调用面裁剪
+         （QuadReassembler / PixelHitTest / EaseManager），不是通用数学库——缺什么按移植件补，不预铺。 -->
+  </PropertyGroup>
+</Project>

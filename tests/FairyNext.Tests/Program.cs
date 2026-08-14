@@ -6,7 +6,7 @@ namespace FairyNext.Tests;
 /// <summary>
 /// 自建 runner：每条用例一行 PASS/FAIL，末行判定 RESULT pass=N fail=N（机器可判，CI grep 即门）。
 /// </summary>
-public static class Program
+public static partial class Program
 {
     private static int _pass, _fail;
 
@@ -16,6 +16,7 @@ public static class Program
         HandleNoneSemantics();
         AbiSanity();
         PhaseTableFrozen();
+        NumericsSuite();   // M1-02，用例在 NumericsTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

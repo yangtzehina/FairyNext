@@ -11,5 +11,6 @@
     <ProjectReference Include="../../src/Contracts/FairyNext.Contracts.csproj" />
     <ProjectReference Include="../../src/Backend.Mock/FairyNext.Backend.Mock.csproj" />
     <ProjectReference Include="../../src/Compiler/FairyNext.Compiler.csproj" />
+    <ProjectReference Include="../../src/Numerics/FairyNext.Numerics.csproj" />
   </ItemGroup>
 </Project>
