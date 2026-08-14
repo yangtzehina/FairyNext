@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.Backend.Mock</RootNamespace>
+    <!-- mock 后端（承诺 10）：无 GPU 行为测试宿主 + 参考光栅（确定性三规则，v1.2）。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/FairyNext.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,58 @@
+using FairyNext.Contracts;
+using FairyNext.Core;
+
+namespace FairyNext.Tests;
+
+/// <summary>
+/// 自建 runner：每条用例一行 PASS/FAIL，末行判定 RESULT pass=N fail=N（机器可判，CI grep 即门）。
+/// </summary>
+public static class Program
+{
+    private static int _pass, _fail;
+
+    public static int Main()
+    {
+        HandlePackRoundtrip();
+        HandleNoneSemantics();
+        AbiSanity();
+        PhaseTableFrozen();
+
+        Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
+        return _fail == 0 ? 0 : 1;
+    }
+
+    private static void HandlePackRoundtrip()
+    {
+        var h = new NodeHandle(0xABCDEF, 0x1234, 0x0007);
+        var r = NodeHandle.Unpack(h.Pack());
+        Check("NodeHandle Pack/Unpack 往返", r.Equals(h) && r.Index == 0xABCDEF && r.Gen == 0x1234 && r.Tree == 7);
+    }
+
+    private static void HandleNoneSemantics()
+    {
+        Check("NodeHandle.None 语义", NodeHandle.None.IsNone && !new NodeHandle(1, 0, 0).IsNone
+            && NodeHandle.Unpack(0).IsNone);
+    }
+
+    private static void AbiSanity()
+    {
+        Check("Abi: quad 16B 对齐", Abi.QuadInstanceSize % 16 == 0);
+        Check("Abi: 段纹理槽 2bit 可编码", Abi.SegmentMaxTextures <= 4);
+        Check("Abi: 掩码硬顶 = 单 word", Abi.MaxObservableProps == 64);
+        Check("Abi: FGB magic = FGB1", Abi.FgbMagic == 0x31424746);
+    }
+
+    private static void PhaseTableFrozen()
+    {
+        // 法定词表冻结：编号即契约（设计书 §02），挪动任何相位 = 破坏所有接缝。
+        Check("FramePhase 法定编号冻结",
+            (byte)FramePhase.P0_Input == 0 && (byte)FramePhase.P4_State == 4 &&
+            (byte)FramePhase.P7_RenderDrain == 7 && (byte)FramePhase.P9_FrameEnd == 9);
+    }
+
+    private static void Check(string name, bool ok)
+    {
+        if (ok) { _pass++; Console.WriteLine($"PASS {name}"); }
+        else { _fail++; Console.WriteLine($"FAIL {name}"); }
+    }
+}

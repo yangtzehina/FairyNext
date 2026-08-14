@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.Compiler</RootNamespace>
+    <!-- 编译器 = 无头运行时（承诺 8）：本工程引用 Core，.fui→FGB 的布局/排序/烘焙全部经真运行时代码路径产出。
+         netstandard2.1 使其可被 Unity 编辑器进程内引用（JIT 预览）；CLI 壳后续以 net9.0 console 包装。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/FairyNext.Core.csproj" />
+  </ItemGroup>
+</Project>

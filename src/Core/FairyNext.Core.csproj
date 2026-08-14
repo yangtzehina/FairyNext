@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.Core</RootNamespace>
+    <!-- 承诺 9：核心零依赖纯 C#。本工程永不引用 Unity、永不引用第三方包。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Contracts/FairyNext.Contracts.csproj" />
+  </ItemGroup>
+</Project>

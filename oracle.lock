@@ -1,0 +1,8 @@
+{
+  "comment": "参考实现（oracle）钉死。像素对照门/布局全组合矩阵/首分歧帧全部对拍此仓库此提交。只读：修 oracle bug 才允许动它，动了必须 bump 此处 SHA 并重跑全部 golden。",
+  "repo": "https://github.com/yangtzehina/FairyGUI-unity",
+  "localPath": "~/ECS/FairyGUI-unity",
+  "sha": "d1a9d7d",
+  "unityVersion": "2022.3.62f3",
+  "driver": "UniCli (~/bin/unicli, UNICLI_PROJECT=~/ECS/FairyGUI-unity)"
+}

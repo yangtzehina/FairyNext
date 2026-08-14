@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.Contracts</RootNamespace>
+    <!-- ABI 常量单一事实源（设计书 v1.2）。零依赖；codegen 工具从本工程生成 HLSL include 与 mock 常量。 -->
+  </PropertyGroup>
+</Project>

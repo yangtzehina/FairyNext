@@ -1,0 +1,20 @@
+# dotnet
+bin/
+obj/
+artifacts/
+*.user
+
+# Unity (unity/ 工程)
+unity/[Ll]ibrary/
+unity/[Tt]emp/
+unity/[Ll]ogs/
+unity/[Uu]serSettings/
+unity/[Oo]bj/
+unity/[Bb]uild/
+unity/*.csproj
+unity/*.sln
+
+# IDE / OS
+.vs/
+.idea/
+.DS_Store
