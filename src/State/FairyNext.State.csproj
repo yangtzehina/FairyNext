@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.State</RootNamespace>
+    <!-- 承诺 9：核心零依赖纯 C#。状态平面四件套（ViewModel/Binder/CommandQueue/KeyedListDiffer）
+         + 绑定属性 + Ease 求值（M1-03 fork 直搬）。Binder/VM 本期只入库，挂接 P4 相位在 M2-05。 -->
+  </PropertyGroup>
+</Project>

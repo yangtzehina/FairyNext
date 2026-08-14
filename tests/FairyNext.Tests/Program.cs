@@ -17,6 +17,8 @@ public static partial class Program
         AbiSanity();
         PhaseTableFrozen();
         NumericsSuite();   // M1-02，用例在 NumericsTests.cs（partial）
+        StateSuite();      // M1-03 直搬包，用例在 StateTests.cs（partial）
+        AdjacencySuite();  // M1-03 渲染平面纯函数 golden，用例在 AdjacencySorterTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;
