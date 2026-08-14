@@ -1,0 +1,8 @@
+{
+  "scene": "scene-001",
+  "stage": { "width": 640, "height": 360, "unitsPerPixel": 0.02 },
+  "nodes": [
+    { "path": "/solid", "name": "solid", "type": "GGraph", "x": 40, "y": 40, "width": 220, "height": 120, "scaleX": 1, "scaleY": 1, "rotation": 0, "alpha": 1, "visible": true },
+    { "path": "/nine", "name": "nine", "type": "GImage", "x": 40, "y": 200, "width": 420, "height": 110, "scaleX": 1, "scaleY": 1, "rotation": 0, "alpha": 1, "visible": true }
+  ]
+}

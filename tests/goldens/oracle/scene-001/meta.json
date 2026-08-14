@@ -1,0 +1,19 @@
+{
+  "scene": "scene-001",
+  "oracleSha": "d1a9d7d",
+  "unityVersion": "2022.3.62f3",
+  "colorSpace": "Gamma",
+  "graphicsDevice": "Metal",
+  "driver": "unicli 1.6.0",
+  "capturedUtc": "2026-08-14T18:00:46Z",
+  "image": { "width": 640, "height": 360, "bytes": 24157 },
+  "tolerance": {
+    "layoutEpsPx": 0.5,
+    "layoutEpsUnitless": 0.001,
+    "layoutEpsDegrees": 0.01,
+    "pixelChannelDelta": 2,
+    "pixelMaxChannelDelta": 64,
+    "pixelDiffRatio": 0.002,
+    "hotspotCell": 16
+  }
+}

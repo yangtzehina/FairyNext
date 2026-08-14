@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.Tools.OracleCompare</RootNamespace>
+    <!-- oracle 对拍基建（M1-04）的**消费端**：只读入库的 golden（PNG + layout JSON + meta），
+         与 Unity / UniCli 零关系——CI 上没有 Unity 也必须能跑这条门。生成端在 tools/oracle/。
+         零 NuGet：JSON 与 PNG 都是自带的最小实现（System.IO.Compression 在 netstandard2.1 内置）。 -->
+  </PropertyGroup>
+</Project>

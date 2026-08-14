@@ -1,0 +1,33 @@
+{
+  "id": "scene-001",
+  "comment": "首个 oracle 场景：纯色 GGraph 矩形 + 九宫格图（Basics/b4，scale9Grid 40,17,80,34）。全部绝对坐标，不依赖 Game View 尺寸；stage 尺寸由驱动强制钉死。",
+  "stageWidth": 640,
+  "stageHeight": 360,
+  "background": { "r": 0.09, "g": 0.09, "b": 0.11, "a": 1.0 },
+  "packages": [ "UI/Basics" ],
+  "tolerance": {
+    "layoutEpsPx": 0.5,
+    "layoutEpsUnitless": 0.001,
+    "layoutEpsDegrees": 0.01,
+    "pixelChannelDelta": 2,
+    "pixelMaxChannelDelta": 64,
+    "pixelDiffRatio": 0.002,
+    "hotspotCell": 16
+  },
+  "nodes": [
+    {
+      "name": "solid",
+      "kind": "graph",
+      "x": 40, "y": 40, "width": 220, "height": 120,
+      "fill": { "r": 0.20, "g": 0.55, "b": 0.90, "a": 1.0 },
+      "lineSize": 4,
+      "line": { "r": 1.0, "g": 0.85, "b": 0.20, "a": 1.0 }
+    },
+    {
+      "name": "nine",
+      "kind": "packageItem",
+      "pkg": "Basics", "item": "b4",
+      "x": 40, "y": 200, "width": 420, "height": 110
+    }
+  ]
+}

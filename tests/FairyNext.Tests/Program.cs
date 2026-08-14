@@ -20,6 +20,7 @@ public static partial class Program
         StateSuite();      // M1-03 直搬包，用例在 StateTests.cs（partial）
         AdjacencySuite();  // M1-03 渲染平面纯函数 golden，用例在 AdjacencySorterTests.cs（partial）
         AbiCodegenSuite(); // M1-01 ABI 字节比对门 + 布局表自洽，用例在 AbiCodegenTests.cs（partial）
+        OracleGoldenSuite(); // M1-04 oracle golden 管线（无 Unity 依赖），用例在 OracleGoldenTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

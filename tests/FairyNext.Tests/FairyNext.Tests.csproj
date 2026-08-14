@@ -15,5 +15,7 @@
     <ProjectReference Include="../../src/State/FairyNext.State.csproj" />
     <!-- 字节比对门要在内存重生成 ABI 产物：门必须调**生成器本体**，不是门里再抄一份格式化逻辑。 -->
     <ProjectReference Include="../../tools/AbiGen.Core/FairyNext.AbiGen.Core.csproj" />
+    <!-- oracle golden 比对（M1-04）：只读 tests/goldens/，不依赖 Unity 在 CI 存在。 -->
+    <ProjectReference Include="../../src/Tools.OracleCompare/FairyNext.Tools.OracleCompare.csproj" />
   </ItemGroup>
 </Project>
