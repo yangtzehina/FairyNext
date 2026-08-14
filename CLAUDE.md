@@ -15,6 +15,7 @@ dotnet 不在 PATH：`export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.do
 ```bash
 dotnet build FairyNext.sln
 dotnet run --project tests/FairyNext.Tests   # 判定行 RESULT pass=N fail=N，fail>0 即红
+dotnet run --project tools/AbiGen            # 改 src/Contracts/Abi.cs 后必跑，再提交生成物（--check 只比对不写）
 ```
 
 测试文化：自建 runner + 判定行（不引 xunit）；行为测试进 mock 后端；journey 带/golden/chaos 对照按设计书 §4.9 逐步进驻。构建产物在 `artifacts/`（ArtifactsPath，勿改——src/ 将被 Unity 以 local package 引入，包内不得出现 bin/obj）。

@@ -13,5 +13,7 @@
     <ProjectReference Include="../../src/Compiler/FairyNext.Compiler.csproj" />
     <ProjectReference Include="../../src/Numerics/FairyNext.Numerics.csproj" />
     <ProjectReference Include="../../src/State/FairyNext.State.csproj" />
+    <!-- 字节比对门要在内存重生成 ABI 产物：门必须调**生成器本体**，不是门里再抄一份格式化逻辑。 -->
+    <ProjectReference Include="../../tools/AbiGen.Core/FairyNext.AbiGen.Core.csproj" />
   </ItemGroup>
 </Project>

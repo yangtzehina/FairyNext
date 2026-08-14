@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>FairyNext.AbiGen.Cli</RootNamespace>
+    <!-- 写盘外壳（M1-01）：唯一职责是把 AbiGen.Core 的纯函数输出落到仓库路径。
+         构建机用（net9.0），不进 Unity 包——生成物本身才进。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AbiGen.Core/FairyNext.AbiGen.Core.csproj" />
+  </ItemGroup>
+</Project>

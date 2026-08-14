@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>FairyNext.AbiGen</RootNamespace>
+    <!-- ABI 生成器的**纯函数**半区（M1-01）：读 src/Contracts/Abi.cs 的数据表 → 产出三份文本。
+         不碰文件系统以外的世界，也不碰文件系统——写盘归 tools/AbiGen 外壳。
+         测试宿主直接引用本工程在内存重生成，与仓库生成物逐字节比对（验证平面不变量 10）。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Contracts/FairyNext.Contracts.csproj" />
+  </ItemGroup>
+</Project>
