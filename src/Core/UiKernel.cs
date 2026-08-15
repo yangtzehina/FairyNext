@@ -201,6 +201,17 @@ public sealed class UiKernel
     /// <summary>P6 下行通道下钻访问器（M1-14 的级联写者）。未装时不下钻——脏位与子树戳留到下一帧。</summary>
     public DownVisitor? DownStep { get; set; }
 
+    /// <summary>
+    /// P7 收尾（M1-14）：五条通道**全部排完之后**、相位仍是 P7 的那一刻。
+    ///
+    /// 为什么必须有这个钩子：升级到 Structure 的动作（slack 溢出 / 段键变化 / 可见性跃迁）
+    /// 是排到第五条通道才知道的，而它不能走 <see cref="Invalidation.Mark"/> 回队——
+    /// P7 的排水水位已冻结，回队的条目本帧不再被排（<see cref="Invalidation.FreezeForRenderDrain"/>），
+    /// 画面要停一帧；更别说 P7 的 Mark 本身就是一次相位违例计数。
+    /// 于是「排完五条再整编一次」落在这里：仍在 P7 窗口内，仍先于 P8 提交。
+    /// </summary>
+    public PhaseHook? DrainTailStep { get; set; }
+
     /// <summary>P8 提交（M1-14：序派生 + 合并区间上传 + 段属性块集中写）。</summary>
     public PhaseHook? SubmitStep { get; set; }
 
@@ -413,7 +424,8 @@ public sealed class UiKernel
     }
 
     /// <summary>
-    /// P7：先冻结排水水位，再按 content → transform → color → visible → structure 排五通道。
+    /// P7：先冻结排水水位，再按 content → transform → color → visible → structure 排五通道，
+    /// 最后调 <see cref="DrainTailStep"/>（升级重编 / 包含剪枝 / 孤岛同步都在那一刻，相位仍是 P7）。
     /// 冻结之后写进来的失效（违约的用户代码、排水器彼此的连锁）本帧不再被消化，下一帧照常排。
     /// </summary>
     private void P7RenderDrain(ref FrameContext ctx)
@@ -424,6 +436,7 @@ public sealed class UiKernel
         _live.DrainedHandles += _invalidation.DrainChannel(ref ctx, Ch.Color);
         _live.DrainedHandles += _invalidation.DrainChannel(ref ctx, Ch.Visible);
         _live.DrainedHandles += _invalidation.DrainChannel(ref ctx, Ch.Structure);
+        DrainTailStep?.Invoke(ref ctx);
     }
 
     /// <summary>

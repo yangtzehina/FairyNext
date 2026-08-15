@@ -340,7 +340,7 @@ public sealed class Extract : IChannelDrain
 
             _table.ResolvedAt(idx, out _, out _, out float w, out float h);
             Affine2D world = _table.WorldAt(idx);
-            bool axisAligned = world.m01 == 0f && world.m10 == 0f;
+            bool axisAligned = IsAxisAligned(in world);
 
             int clip = parentClip;
             if (rec.OpensClip) clip = PushClip(node, in rec.Clip, parentClip, in world, axisAligned, w, h);
@@ -404,19 +404,10 @@ public sealed class Extract : IChannelDrain
 
         // 裁剪域外整只跳过。**只在同帧时判**（同 CanPrune 的纪律）：跨帧比两个矩形是拿两个
         // 坐标系比大小，而且槽一动结论就废。
-        if (clip != ClipBook.NoneEntry)
+        if (ClipCulls(_stream, clip, slot, in toSlot, w, h))
         {
-            int resolved = _stream.Clips.Resolve(clip);
-            if (resolved != ClipBook.NoneEntry && _stream.Clips.Share(resolved).Slot == slot)
-            {
-                Vector4 win = _stream.Clips.Entry(resolved).Rect;
-                LocalAabb(in toSlot, w, h, out float lx0, out float ly0, out float lx1, out float ly1);
-                if (lx1 <= win.x || lx0 >= win.z || ly1 <= win.y || ly0 >= win.w)
-                {
-                    _clipCulled++;
-                    return false;
-                }
-            }
+            _clipCulled++;
+            return false;
         }
 
         if (_pendingCount == _pending.Length) Array.Resize(ref _pending, _pending.Length * 2);
@@ -655,9 +646,32 @@ public sealed class Extract : IChannelDrain
         return _stream.Clips.Push(parent, in p, node, out _);
     }
 
-    // ── 几何小工具 ──────────────────────────────────────────────────────────
+    // ── 与增量路径共用的判据（M1-14）────────────────────────────────────────
+    //
+    // 下面四个 internal static 是**整编与增量的同一份规则**。M1-14 的 StreamDrain 走增量路径时
+    // 必须做出与整编完全相同的判断（落位二分、烘 rect、域外剔除、级联视觉），否则增量流与
+    // 「从树全量重建流」逐字节不等——那正是增量正确性门要红的东西。
+    // 抄一份到排水器里是本包最容易犯、也最难查的错：两份规则会在**边角**上分叉。
 
-    private static IslandVisual VisualOf(uint worldVisual) => new IslandVisual
+    /// <summary>轴对齐判据（落位二分的分界：无旋转/斜切才谈得上把 world 烘进 rect）。</summary>
+    internal static bool IsAxisAligned(in Affine2D m) => m.m01 == 0f && m.m10 == 0f;
+
+    /// <summary>
+    /// 叶是否整只落在其裁剪域之外（同帧才判：跨帧比两个坐标系的矩形没有意义）。
+    /// 结论翻转 = 叶要进/出流 = 数量变化 = 一次整编，不是一次原位重写。
+    /// </summary>
+    internal static bool ClipCulls(RenderStream stream, int clip, int slot, in Affine2D toSlot, float w, float h)
+    {
+        if (clip == ClipBook.NoneEntry) return false;
+        int resolved = stream.Clips.Resolve(clip);
+        if (resolved == ClipBook.NoneEntry || stream.Clips.Share(resolved).Slot != slot) return false;
+        Vector4 win = stream.Clips.Entry(resolved).Rect;
+        LocalAabb(in toSlot, w, h, out float lx0, out float ly0, out float lx1, out float ly1);
+        return lx1 <= win.x || lx0 >= win.z || ly1 <= win.y || ly0 >= win.w;
+    }
+
+    /// <summary>worldVisual → 落叶的级联三元（Color/Visible 通道的输入）。</summary>
+    internal static IslandVisual VisualOf(uint worldVisual) => new IslandVisual
     {
         Alpha = Visual.Alpha(worldVisual) / 255f,
         Visible = (worldVisual & Visual.Visible) != 0,
@@ -665,7 +679,7 @@ public sealed class Extract : IChannelDrain
     };
 
     /// <summary>把一个**轴对齐**变换烘进 quad 的 rect；负缩放时四角 UV 跟着镜像。</summary>
-    private static void BakeToSlot(ref QuadInstance q, in Affine2D m)
+    internal static void BakeToSlot(ref QuadInstance q, in Affine2D m)
     {
         // identity 快路径（骑槽的叶走的就是这条：几何留本地，变换全在槽矩阵里）
         if (m.m00 == 1f && m.m11 == 1f && m.m01 == 0f && m.m10 == 0f && m.tx == 0f && m.ty == 0f) return;

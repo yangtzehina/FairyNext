@@ -67,6 +67,7 @@ public sealed partial class NodeTable
     private Affine2D[] _world = Array.Empty<Affine2D>();
     private uint[] _worldVisual = Array.Empty<uint>();
     private uint[] _paintIndex = Array.Empty<uint>();
+    private uint[] _paintEnd = Array.Empty<uint>();       // 子树在 paintOrder 中的排他终点（切片表，M1-14）
     private uint[] _dirtyWord = Array.Empty<uint>();      // 仅存储：位语义/队列/方向归失效平面
     private uint[] _subtreeStamp = Array.Empty<uint>();   // 仅存储：向下通道子树戳（平面二接缝）
     private ushort[] _gen = Array.Empty<ushort>();        // 仅 P9 递增
@@ -238,6 +239,7 @@ public sealed partial class NodeTable
         if (parent != NoIndex)
         {
             _structEpoch++;                 // 摘链改变了树形，paintOrder 必须重展
+            NoteStructDirty(parent);        // 切片拼接的脏根（M1-14）
             Mark(parent, Ch.Structure, src);
         }
         MarkSubtreeDead(idx);
@@ -260,6 +262,7 @@ public sealed partial class NodeTable
             if (parent != NoIndex)
             {
                 _structEpoch++;
+                NoteStructDirty(parent);
                 Mark(parent, Ch.Structure, src);
             }
             MarkSubtreeDead(idx);
@@ -354,6 +357,7 @@ public sealed partial class NodeTable
         Array.Resize(ref _world, cap);
         Array.Resize(ref _worldVisual, cap);
         Array.Resize(ref _paintIndex, cap);
+        Array.Resize(ref _paintEnd, cap);
         Array.Resize(ref _dirtyWord, cap);
         Array.Resize(ref _subtreeStamp, cap);
         Array.Resize(ref _gen, cap);
@@ -396,7 +400,7 @@ public sealed partial class NodeTable
         _scaleX[idx] = 0f; _scaleY[idx] = 0f; _rotation[idx] = 0f; _skew[idx] = 0f;
         _pivotX[idx] = 0f; _pivotY[idx] = 0f;
         _localVisual[idx] = 0; _contentRef[idx] = 0; _stateRef[idx] = 0; _resolvedRef[idx] = 0;
-        _world[idx] = default; _worldVisual[idx] = 0; _paintIndex[idx] = NotInTree;
+        _world[idx] = default; _worldVisual[idx] = 0; _paintIndex[idx] = NotInTree; _paintEnd[idx] = 0;
         _dirtyWord[idx] = 0; _subtreeStamp[idx] = 0;
     }
 

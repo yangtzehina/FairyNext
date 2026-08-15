@@ -23,6 +23,12 @@ public enum InvalidateReason : byte
     LayoutDerived = 5,
     /// <summary>P2 全局失效窗口的 fan-out。</summary>
     GlobalInvalidate = 6,
+    /// <summary>
+    /// P6 下行下钻的落叶 Mark（M1-14 补：级联值变了的叶要在 P7 重上色/重判隐显）。
+    /// 文档的七值表没有它——因为文档没写下钻**如何**把变化交回上行队列。诊断面按理由聚合的口径
+    /// 要求这条路径可归因：把它记成 UserWrite 会让「谁失效了我」在最常见的 grayed/α 级联上说谎。
+    /// </summary>
+    CascadeDown = 7,
 }
 
 /// <summary>
@@ -357,7 +363,7 @@ public sealed class Invalidation
     private bool _frozen;
 
     private ulong _frameId;
-    private uint _frameStamp = 1;
+    private uint _stampEpoch = 1;
     private bool _pendingGlyph;
     private bool _pendingScreen;
     private int _drainingSlot = -1;
@@ -392,8 +398,17 @@ public sealed class Invalidation
     /// <summary>当前帧号（由相位机在帧首推进）。</summary>
     public ulong FrameId => _frameId;
 
-    /// <summary>本帧的子树戳值（= frameId 截断到 u32；0 是「未戳」哨兵，故 frameId 0 映射为 1）。</summary>
-    public uint FrameStamp => _frameStamp;
+    /// <summary>
+    /// 当前的下钻代（子树戳值；0 是「未戳」哨兵，故递增时跳过 0）。
+    ///
+    /// **不是 frameId 截断**（M1-14 修正）。原形态把戳值钉成 frameId，落地即漏：用户代码写状态的
+    /// 常规窗口是**帧外**（两次 Tick 之间，相位报 P3），那时 <see cref="BeginFrame"/> 还没跑，
+    /// 戳上的是**上一帧**的值；下一帧 P6 按新 frameId 路由，从根第一步就判「本帧无事」，
+    /// 整条下行通道静默丢失——而它的症状是「父置灰了、子节点还是原色」，没有任何账能指认。
+    /// 正确的代是「**自上次下钻以来**」：写者一律戳当前代，<see cref="DrainDown"/> 消费完这一代后 +1。
+    /// 于是帧内写与帧外写落在同一代里，都被下一次下钻收走。
+    /// </summary>
+    public uint FrameStamp => _stampEpoch;
 
     /// <summary>本帧诊断（每通道 Mark 计数 + 按理由聚合 + 各路径收据）。</summary>
     public InvalidationDiag Diagnostics => _diag;
@@ -402,16 +417,13 @@ public sealed class Invalidation
     public InvalidationDiag LastFrame => _lastFrame;
 
     /// <summary>
-    /// 帧首推进（相位机 M1-08 在 P1 之前调）。子树戳按 frameId 取值：
-    /// 老戳自然过期，因而**不需要**遍历清戳。u32 回绕需 2^32 帧（60fps ≈ 828 天），
+    /// 帧首推进（相位机 M1-08 在 P1 之前调）。**不动下钻代**——代由 <see cref="DrainDown"/>
+    /// 消费时推进（见 <see cref="FrameStamp"/>）：帧外写入与帧内写入必须落在同一代里，
+    /// 否则帧外那批（用户代码最常见的窗口）永远等不到下钻。
+    /// 老戳自然过期，因而**不需要**遍历清戳。u32 回绕需 2^32 次下钻，
     /// 回绕后最坏结果是一次多余的路由下钻（脏位没置 ⇒ 不会算错）。
     /// </summary>
-    public void BeginFrame(ulong frameId)
-    {
-        _frameId = frameId;
-        uint s = (uint)frameId;
-        _frameStamp = s == 0 ? 1u : s;
-    }
+    public void BeginFrame(ulong frameId) => _frameId = frameId;
 
     /// <summary>P9 锁存：把本帧诊断拷进 <see cref="LastFrame"/> 并清零本帧计数。</summary>
     public void LatchFrame()
@@ -537,8 +549,8 @@ public sealed class Invalidation
         _table.OrDirty(index, (uint)down);
         for (uint cur = index; cur != NodeTable.NoIndex; cur = _table.ParentIndex(cur))
         {
-            if (_table.GetSubtreeStamp(cur) == _frameStamp) { _diag.DownStampStops++; return; }
-            _table.SetSubtreeStamp(cur, _frameStamp);
+            if (_table.GetSubtreeStamp(cur) == _stampEpoch) { _diag.DownStampStops++; return; }
+            _table.SetSubtreeStamp(cur, _stampEpoch);
             _diag.DownStamps++;
         }
     }
@@ -571,6 +583,23 @@ public sealed class Invalidation
         return slot < 0 ? 0 : _queue[slot].Count;
     }
 
+    /// <summary>
+    /// 窥视一条上行通道的在队快照（**不出队、不清位**）。
+    ///
+    /// 给 P6 用：派生列的增量重算要知道「哪些子树的几何脏了」，而那些条目的**消费权归 P7**——
+    /// 在 P6 出队等于把 P7 的活干掉一半，流永远等不到那批句柄。窥视是唯一自洽的读法：
+    /// 一条失效可以被多个相位**读**，但只能被一个相位**消费**。
+    ///
+    /// 返回的 span 指向内部环形缓冲：拿着它的期间不得再 Mark（会扩容搬家）。
+    /// 调用方要跨 Mark 使用就先拷走——P6 的排水器正是先拷成脏根表再动手。
+    /// </summary>
+    public ReadOnlySpan<NodeHandle> Peek(Ch channel)
+    {
+        int slot = ChMask.UpSlot(channel);
+        UiAssert.That(slot >= 0, "Peek 只接受单个上行通道位");
+        return slot < 0 ? ReadOnlySpan<NodeHandle>.Empty : _queue[slot].Contiguous();
+    }
+
     /// <summary>节点是否带有给定通道位中的任意一位。</summary>
     public bool IsDirty(NodeHandle node, Ch channels) =>
         _table.TryResolve(node, out uint i) && (_table.GetDirty(i) & (uint)channels) != 0;
@@ -581,7 +610,7 @@ public sealed class Invalidation
 
     /// <summary>节点的子树戳是否为本帧（= 本帧其子树里有下行变化）。</summary>
     public bool IsStampedThisFrame(NodeHandle node) =>
-        _table.TryResolve(node, out uint i) && _table.GetSubtreeStamp(i) == _frameStamp;
+        _table.TryResolve(node, out uint i) && _table.GetSubtreeStamp(i) == _stampEpoch;
 
     /// <summary>BoundsD 是否脏（query-pull 的探询半边，不清位）。</summary>
     public bool IsBoundsDirty(NodeHandle node) => IsDirty(node, Ch.BoundsD);
@@ -775,7 +804,7 @@ public sealed class Invalidation
 
     /// <summary>
     /// 下行通道排水（P6）。从根出发：
-    ///  - 只进入 <c>subtreeStamp == FrameStamp</c> 的分支（**路由**：未被本帧戳过的子树整棵不看）；
+    ///  - 只进入 <c>subtreeStamp == FrameStamp</c> 的分支（**路由**：自上次下钻以来未被戳过的子树整棵不看）；
     ///  - 碰到带下行脏位的节点即「下钻根」，其整棵子树都要重算，位沿途继承给后代（**下钻**）；
     ///  - 局部不可见的节点自己重算一次后**整棵子树免下钻**——隐藏期间无人读它的级联值，
     ///    重新显示时由 <c>Visible</c> 通道的 DownVisible 位（或 <see cref="RestampOnShow"/>）补一次全子树下钻；
@@ -798,7 +827,7 @@ public sealed class Invalidation
 
             Ch own = (Ch)_table.GetDirty(idx) & ChMask.Down;
             Ch bits = inherited | own;
-            bool stamped = _table.GetSubtreeStamp(idx) == _frameStamp;
+            bool stamped = _table.GetSubtreeStamp(idx) == _stampEpoch;
             if (bits == Ch.None && !stamped) continue;      // 本分支本帧无事
 
             if (own != Ch.None) _table.ClearDirty(idx, (uint)own);   // 消费即清
@@ -815,6 +844,10 @@ public sealed class Invalidation
             for (uint c = _table.LastChildIndex(idx); c != NodeTable.NoIndex; c = _table.PrevSiblingIndex(c))
                 PushWalk(c, bits);
         }
+
+        // 这一代消费完了：推进代号，此后（P7/P8 的违约写、以及**帧外**的常规用户写）落在下一代，
+        // 由下一次下钻收走。推进点必须在这里而不是帧首——见 FrameStamp 的文档。
+        _stampEpoch = _stampEpoch == uint.MaxValue ? 1u : _stampEpoch + 1u;
         return visited;
     }
 

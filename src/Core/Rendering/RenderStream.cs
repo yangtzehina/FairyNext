@@ -862,8 +862,13 @@ public sealed class RenderStream
         q.Color = ColorTier.Apply(baseColor, in visual);
     }
 
-    /// <summary>预留实例数：请求了 slack 才向上取 2 的幂，否则严丝合缝等于实际长度。</summary>
-    private static int SlackFor(int count, int hint)
+    /// <summary>
+    /// 预留实例数：请求了 slack 才向上取 2 的幂，否则严丝合缝等于实际长度。
+    /// **公开是增量路径的需要**（M1-14）：content 原位重写前必须先问「整编会给这个长度留多少」——
+    /// 答案不同就说明预留区的形状会变，那是一次整编而不是一次原位重写，
+    /// 否则增量流会比整编流多出一段永远填不满的预留区（逐字节门当场变红）。
+    /// </summary>
+    public static int SlackFor(int count, int hint)
     {
         if (hint <= 0) return count;
         int want = hint > count ? hint : count;

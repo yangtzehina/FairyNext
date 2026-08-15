@@ -34,6 +34,9 @@ public static partial class Program
                              // 位布局）+ QuadReassembler 移植件，用例在 LeafEmitterTests.cs（partial）
         ExtractSuite();      // M1-13 Extract（paintOrder 遍历 → 相邻性排序 → 切段）与
                              // Structure 通道的整流重编，用例在 ExtractTests.cs（partial）
+        PipelineSuite();     // M1-14 P6/P7/P8 排水打通（切片拼接 / 派生列增量 / 下行下钻 / 五通道 /
+                             // 合并区间上传）+ **增量正确性门（L2）与零脏帧空转收据**上线，
+                             // 正例负例各一，用例在 PipelineTests.cs（partial）
         FuiReaderSuite();    // M1-12 .fui 前端读取器（ByteBuffer 移植 + 包/组件/显示列表解析）：
                              // 对 tests/fixtures/fui 的真实样例包做字段级对照（对照物 = 编辑器授权 XML），
                              // 用例在 FuiReaderTests.cs（partial）

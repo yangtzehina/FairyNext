@@ -1,8 +1,60 @@
 using System.Text;
+using FairyNext.Core;
 using FairyNext.Core.Rendering;
 using FairyNext.Numerics;
 
 namespace FairyNext.Backend.Mock;
+
+/// <summary>规范形的分区（<see cref="CanonicalStream.Locate"/> 的粗定位）。</summary>
+public enum CanonicalSection : byte
+{
+    /// <summary>魔数 + 版本 + 实例条数。</summary>
+    Header = 0,
+    /// <summary>实例表。</summary>
+    Quads = 1,
+    /// <summary>被引用的 transform 槽表。</summary>
+    Slots = 2,
+    /// <summary>被引用的裁剪条目表。</summary>
+    Clips = 3,
+    /// <summary>段表。</summary>
+    Segments = 4,
+    /// <summary>run 派生序。</summary>
+    Runs = 5,
+    /// <summary>结构代。</summary>
+    Epoch = 6,
+    /// <summary>未乘 α 的基色表。</summary>
+    BaseColor = 7,
+    /// <summary>越过规范形末尾（= 两条流长度不同）。</summary>
+    Beyond = 8,
+}
+
+/// <summary>
+/// 规范形里的一个位置（增量正确性门失败时的定位结果）。
+/// <see cref="Channel"/> 是「这个字段该由哪条通道负责」——门失败要直接指认**哪条通道漏标了**，
+/// 而不是丢一个字节偏移让人自己去数。
+/// </summary>
+public readonly struct CanonicalSite
+{
+    /// <summary>分区。</summary>
+    public readonly CanonicalSection Section;
+    /// <summary>分区内的元素下标（Header/Epoch 恒 0）。</summary>
+    public readonly int Index;
+    /// <summary>字段名。</summary>
+    public readonly string Field;
+    /// <summary>负责该字段的通道（可多位：字段由多条通道共同决定时不假装只有一个嫌疑人）。</summary>
+    public readonly Ch Channel;
+
+    internal CanonicalSite(CanonicalSection section, int index, string field, Ch channel)
+    {
+        Section = section; Index = index; Field = field; Channel = channel;
+    }
+
+    /// <inheritdoc/>
+    public override string ToString() =>
+        Section == CanonicalSection.Header || Section == CanonicalSection.Epoch || Section == CanonicalSection.Beyond
+            ? $"{Section}.{Field} ⇐ {Channel}"
+            : $"{Section}[{Index}].{Field} ⇐ {Channel}";
+}
 
 /// <summary>
 /// 实例流的**规范化**字节形态与哈希（架构「平面六」核心数据结构 <c>Trace.streamHash</c>）。
@@ -153,6 +205,133 @@ public static class CanonicalStream
         int n = a.Length < b.Length ? a.Length : b.Length;
         for (int i = 0; i < n; i++) if (a[i] != b[i]) return i;
         return a.Length == b.Length ? -1 : n;
+    }
+
+    // ── 定位：字节偏移 → 分区/字段/通道 ────────────────────────────────────
+    //
+    // 布局常量在这里**重述一遍** Canonicalize 的写入序。两处不同步 = 定位说谎，
+    // 所以下面每条都由一条单测按同一份快照正向验（写多少字节、落在哪个分区）。
+    // 不把布局抽成表驱动是有意的：写入侧的可读性优先于两侧的形式统一，
+    // 而定位侧的错误只会让报告指错地方，不会让门漏判——判等仍由字节比对本身给出。
+
+    private const int HeaderBytes = 4 + 1 + 4;      // magic + version + quadCount
+    private const int QuadBytes = 16 * 4 + 4 * 3 + 1 + 4 * 2;
+    private const int SlotBytes = 4 * 6 + 2;
+    private const int ClipBytes = 16 + 8 + 16 + 4;
+    private const int SegmentBytes = 4 * 4 + 1 + 1 + 4 * 3;
+    private const int RunBytes = 8;
+
+    /// <summary>
+    /// 把 <see cref="FirstDifference"/> 给的字节偏移翻译成「哪个分区的哪个字段、该由哪条通道负责」。
+    /// 增量正确性门的失败报告靠它从「第 137 字节不同」变成「quad[1].color ⇐ Color 通道」。
+    /// </summary>
+    public static CanonicalSite Locate(StreamSnapshot snapshot, int offset)
+    {
+        if (snapshot == null || offset < 0) return new CanonicalSite(CanonicalSection.Beyond, 0, "(none)", Ch.None);
+
+        if (offset < HeaderBytes)
+        {
+            // 实例条数不同 = 叶的进出或预留区形状变了：那是结构的事。
+            string field = offset < 5 ? "magic/version" : "quadCount";
+            return new CanonicalSite(CanonicalSection.Header, 0, field, offset < 5 ? Ch.None : Ch.Structure);
+        }
+        int at = offset - HeaderBytes;
+
+        int quadBytes = snapshot.Quads.Length * QuadBytes;
+        if (at < quadBytes) return LocateQuad(at / QuadBytes, at % QuadBytes);
+        at -= quadBytes;
+
+        if (at < 4) return new CanonicalSite(CanonicalSection.Slots, 0, "count", Ch.Structure);
+        at -= 4;
+        int slotBytes = CountReferenced(snapshot, referencedSlots: true) * SlotBytes;
+        if (at < slotBytes)
+        {
+            int i = at / SlotBytes, f = at % SlotBytes;
+            return new CanonicalSite(CanonicalSection.Slots, i,
+                f < 24 ? "matrix" : "flags", Ch.Transform);
+        }
+        at -= slotBytes;
+
+        if (at < 4) return new CanonicalSite(CanonicalSection.Clips, 0, "count", Ch.Structure);
+        at -= 4;
+        int clipBytes = CountReferenced(snapshot, referencedSlots: false) * ClipBytes;
+        if (at < clipBytes)
+        {
+            int i = at / ClipBytes, f = at % ClipBytes;
+            string field = f < 16 ? "rect" : f < 24 ? "soft" : f < 40 ? "radii" : "slot";
+            return new CanonicalSite(CanonicalSection.Clips, i, field,
+                f < 16 || f >= 40 ? Ch.Structure | Ch.Transform : Ch.Structure);
+        }
+        at -= clipBytes;
+
+        if (at < 4) return new CanonicalSite(CanonicalSection.Segments, 0, "count", Ch.Structure);
+        at -= 4;
+        int segBytes = snapshot.Segments.Length * SegmentBytes;
+        if (at < segBytes)
+        {
+            int i = at / SegmentBytes, f = at % SegmentBytes;
+            string field = f < 16 ? "textures" : f < 18 ? "key" : f < 22 ? "start" : f < 26 ? "count" : "run";
+            return new CanonicalSite(CanonicalSection.Segments, i, field, Ch.Structure);
+        }
+        at -= segBytes;
+
+        if (at < 4) return new CanonicalSite(CanonicalSection.Runs, 0, "count", Ch.Structure);
+        at -= 4;
+        int runBytes = snapshot.Runs.Length * RunBytes;
+        if (at < runBytes)
+        {
+            int i = at / RunBytes, f = at % RunBytes;
+            return new CanonicalSite(CanonicalSection.Runs, i, f < 4 ? "runIndex" : "sortingOrder", Ch.Structure);
+        }
+        at -= runBytes;
+
+        if (at < 4) return new CanonicalSite(CanonicalSection.Epoch, 0, "structEpoch", Ch.Structure);
+        at -= 4;
+
+        if (at < 4) return new CanonicalSite(CanonicalSection.BaseColor, 0, "count", Ch.Structure);
+        at -= 4;
+        if (at < snapshot.BaseColor.Length * 4)
+            return new CanonicalSite(CanonicalSection.BaseColor, at / 4, "baseColor", Ch.Content);
+
+        return new CanonicalSite(CanonicalSection.Beyond, 0, "(length)", Ch.Structure);
+    }
+
+    private static CanonicalSite LocateQuad(int index, int field)
+    {
+        // 字段 → 通道：rect 归变换（几何落位），uv/aux/extra 归内容（发射器的产物），
+        // color 归颜色，flags 两者都沾（发射位 + grayed 位），route 三分量归结构（切段与落位的产物）。
+        if (field < 16) return new CanonicalSite(CanonicalSection.Quads, index, "rect", Ch.Transform | Ch.Content);
+        if (field < 32) return new CanonicalSite(CanonicalSection.Quads, index, "uvA", Ch.Content);
+        if (field < 48) return new CanonicalSite(CanonicalSection.Quads, index, "uvB", Ch.Content);
+        if (field < 64) return new CanonicalSite(CanonicalSection.Quads, index, "extra", Ch.Content);
+        if (field < 68) return new CanonicalSite(CanonicalSection.Quads, index, "color", Ch.Color | Ch.Visible);
+        if (field < 72) return new CanonicalSite(CanonicalSection.Quads, index, "flags", Ch.Color | Ch.Content);
+        if (field < 76) return new CanonicalSite(CanonicalSection.Quads, index, "aux", Ch.Content);
+        if (field < 77) return new CanonicalSite(CanonicalSection.Quads, index, "texSlot", Ch.Structure);
+        if (field < 81) return new CanonicalSite(CanonicalSection.Quads, index, "slot", Ch.Transform | Ch.Structure);
+        return new CanonicalSite(CanonicalSection.Quads, index, "clip", Ch.Structure);
+    }
+
+    /// <summary>规范形里真正写下的槽/裁剪条目数（未被引用的条目不进哈希，定位也要按同一口径数）。</summary>
+    private static int CountReferenced(StreamSnapshot snapshot, bool referencedSlots)
+    {
+        ReadOnlySpan<QuadInstance> quads = snapshot.Quads;
+        ReadOnlySpan<ClipEntry> clips = snapshot.Clips;
+        var slotMap = new Renumber(snapshot.Slots.Length);
+        var clipMap = new Renumber(clips.Length);
+        slotMap.Claim(0);
+        clipMap.Claim(0);
+        for (int i = 0; i < quads.Length; i++)
+        {
+            clipMap.Claim((int)quads[i].ClipIndex);
+            slotMap.Claim((int)quads[i].SlotIndex);
+        }
+        for (int id = 0; id < clipMap.Count; id++)
+        {
+            int src = clipMap.SourceOf(id);
+            if ((uint)src < (uint)clips.Length) slotMap.Claim((int)clips[src].Slot);
+        }
+        return referencedSlots ? slotMap.Count : clipMap.Count;
     }
 
     /// <summary>

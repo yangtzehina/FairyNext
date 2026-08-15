@@ -134,7 +134,12 @@ public sealed partial class NodeTable
         LinkAt(p, c, index);
         _structEpoch++;
 
-        if (old != NoIndex && old != p) Mark(old, Ch.Structure, src);
+        if (old != NoIndex && old != p)
+        {
+            NoteStructDirty(old);
+            Mark(old, Ch.Structure, src);
+        }
+        NoteStructDirty(p);
         Mark(p, Ch.Structure, src);
         // 子树的 world 需要在 P6 重算：结构位归父、变换位归子，两条都要给失效平面。
         Mark(c, Ch.Transform, src);
@@ -148,6 +153,7 @@ public sealed partial class NodeTable
         uint p = DetachCore(c);
         if (p == NoIndex) return false;
         _structEpoch++;
+        NoteStructDirty(p);
         Mark(p, Ch.Structure, src);
         return true;
     }
@@ -167,6 +173,7 @@ public sealed partial class NodeTable
         DetachCore(c);
         LinkAt(p, c, index);
         _structEpoch++;
+        NoteStructDirty(p);
         Mark(p, Ch.Structure, src);
         return true;
     }
