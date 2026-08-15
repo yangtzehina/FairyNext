@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>FairyNext.PropGen.Tests</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- 生成器门（M1-09）：用 CSharpGeneratorDriver 跑**真实生成器** + stub 类型，判定行 RESULT pass=N fail=N。
+         它不进 tests/FairyNext.Tests 只有一个原因——主 runner 是零 NuGet 工程，而驱动生成器必须引 Roslyn。
+         跑法见 CLAUDE.md 构建节。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 生成器编译面钉在 4.3.0（Unity 2022.3 的 Roslyn 上限）；驱动它的宿主可以更新，向上绑定兼容。 -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <ProjectReference Include="../PropGen/FairyNext.PropGen.csproj" />
+  </ItemGroup>
+</Project>

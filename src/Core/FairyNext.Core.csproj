@@ -13,6 +13,15 @@
          输入队列同款。方向是 Core → State 且**只能**是这个方向：State 必须保持叶子工程
          （零 ProjectReference），反向引用会与 P4 的 Binder/Resolve 接线成环。 -->
     <ProjectReference Include="../State/FairyNext.State.csproj" />
+    <!-- M1-09：属性 setter 生成器按**分析器**接入（ReferenceOutputAssembly=false ⇒ 本工程的
+         运行时引用面不变，承诺 9 的「零依赖」不破）。生成器工程自己引 Roslyn 包，PrivateAssets=all
+         挡住传递。生成物是 NodeTable 的每属性写口 + PropId 分派 + NodeProps.All 元表：
+         **生成器不在场 = 本工程编译不过**，这是有意的——属性表缺席时该构建失败，
+         而不是退化成空表让 setter 静默失踪。
+         Unity 侧接缝（M1-15）：local package 要一并投放 FairyNext.PropGen.dll 并打 RoslynAnalyzer 资产标签，
+         否则 Unity 自己的编译看不到生成物。 -->
+    <ProjectReference Include="../../tools/PropGen/FairyNext.PropGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <!-- 门要能被单测断言「确实响了」，失效钩子要能被单测装：内部面对测试工程开放。 -->

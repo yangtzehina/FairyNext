@@ -186,7 +186,7 @@ public static class AbiLayout
     /// <summary>文本串/字号/描边 —— Ch.Text</summary>
     public const byte PropGroupTextFirst = 96;
     public const byte PropGroupTextLast = 127;
-    /// <summary>x/y/scale/rotation/skew/pivot —— Ch.Transform</summary>
+    /// <summary>x/y/scale/rotation/skew/pixelSnap —— Ch.Transform</summary>
     public const byte PropGroupTransformFirst = 128;
     public const byte PropGroupTransformLast = 159;
 
@@ -205,6 +205,8 @@ public static class AbiLayout
     public const byte PropIdGrayed = 66;
     /// <summary>[Visual] tint 基色（未乘 α，Color 通道从基色重乘）</summary>
     public const byte PropIdColor = 67;
+    /// <summary>[Visual] 局部可命中（worldVisual 按 AND 级联；事件平面 P0 读）</summary>
+    public const byte PropIdTouchable = 68;
     /// <summary>[Text] 字符串表 id（STRT/LANG 视图叠加后取值）</summary>
     public const byte PropIdTextId = 96;
     /// <summary>[Text] 字号（逻辑单位；度量与栅格密度解耦）</summary>
@@ -219,6 +221,10 @@ public static class AbiLayout
     public const byte PropIdScaleY = 131;
     /// <summary>[Transform] 旋转（弧度，绕 pivot）</summary>
     public const byte PropIdRotation = 132;
+    /// <summary>[Transform] 剪切角（弧度，水平剪切；fork 的双值 skewX/skewY 编译期归一）</summary>
+    public const byte PropIdSkew = 133;
+    /// <summary>[Transform] 像素对齐位（不级联；存 localVisual 位段，通道归 Transform）</summary>
+    public const byte PropIdPixelSnap = 134;
 
     // ---- 编译期断言：字段首尾相接、末字段收口于结构尺寸、位域覆盖全 32 位 ----
     // 不成立即 1/0 → CS0020 编译错（L0 门：错误在跑起来之前死掉）。
@@ -306,20 +312,23 @@ public static class AbiLayout
         if (Abi.PropGroups[1].First != PropGroupVisualFirst || Abi.PropGroups[1].Last != PropGroupVisualLast) return "分组 Visual 区间与生成物不符";
         if (Abi.PropGroups[2].First != PropGroupTextFirst || Abi.PropGroups[2].Last != PropGroupTextLast) return "分组 Text 区间与生成物不符";
         if (Abi.PropGroups[3].First != PropGroupTransformFirst || Abi.PropGroups[3].Last != PropGroupTransformLast) return "分组 Transform 区间与生成物不符";
-        if (Abi.PropIds.Length != 13) return "Abi.PropIds 表长与生成物不符";
+        if (Abi.PropIds.Length != 16) return "Abi.PropIds 表长与生成物不符";
         if (Abi.PropIds[0].Id != PropIdWidth) return "PropId Width 与生成物不符";
         if (Abi.PropIds[1].Id != PropIdHeight) return "PropId Height 与生成物不符";
         if (Abi.PropIds[2].Id != PropIdAlpha) return "PropId Alpha 与生成物不符";
         if (Abi.PropIds[3].Id != PropIdVisible) return "PropId Visible 与生成物不符";
         if (Abi.PropIds[4].Id != PropIdGrayed) return "PropId Grayed 与生成物不符";
         if (Abi.PropIds[5].Id != PropIdColor) return "PropId Color 与生成物不符";
-        if (Abi.PropIds[6].Id != PropIdTextId) return "PropId TextId 与生成物不符";
-        if (Abi.PropIds[7].Id != PropIdFontSize) return "PropId FontSize 与生成物不符";
-        if (Abi.PropIds[8].Id != PropIdX) return "PropId X 与生成物不符";
-        if (Abi.PropIds[9].Id != PropIdY) return "PropId Y 与生成物不符";
-        if (Abi.PropIds[10].Id != PropIdScaleX) return "PropId ScaleX 与生成物不符";
-        if (Abi.PropIds[11].Id != PropIdScaleY) return "PropId ScaleY 与生成物不符";
-        if (Abi.PropIds[12].Id != PropIdRotation) return "PropId Rotation 与生成物不符";
+        if (Abi.PropIds[6].Id != PropIdTouchable) return "PropId Touchable 与生成物不符";
+        if (Abi.PropIds[7].Id != PropIdTextId) return "PropId TextId 与生成物不符";
+        if (Abi.PropIds[8].Id != PropIdFontSize) return "PropId FontSize 与生成物不符";
+        if (Abi.PropIds[9].Id != PropIdX) return "PropId X 与生成物不符";
+        if (Abi.PropIds[10].Id != PropIdY) return "PropId Y 与生成物不符";
+        if (Abi.PropIds[11].Id != PropIdScaleX) return "PropId ScaleX 与生成物不符";
+        if (Abi.PropIds[12].Id != PropIdScaleY) return "PropId ScaleY 与生成物不符";
+        if (Abi.PropIds[13].Id != PropIdRotation) return "PropId Rotation 与生成物不符";
+        if (Abi.PropIds[14].Id != PropIdSkew) return "PropId Skew 与生成物不符";
+        if (Abi.PropIds[15].Id != PropIdPixelSnap) return "PropId PixelSnap 与生成物不符";
         return null;
     }
 }

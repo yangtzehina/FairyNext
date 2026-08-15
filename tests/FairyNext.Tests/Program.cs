@@ -24,6 +24,8 @@ public static partial class Program
         NodeTableSuite();   // M1-06 数据宪法不变量，用例在 NodeTableTests.cs（partial）
         InvalidationSuite(); // M1-07 失效协议（时间宪法不变量），用例在 InvalidationTests.cs（partial）
         UiKernelSuite();     // M1-08 相位机 + Clock（时间宪法不变量 9/10/11/14），用例在 UiKernelTests.cs（partial）
+        NodePropsSuite();    // M1-09 setter codegen 的运行期面（归属表自洽 / 逐 PropId 等值切断 / 来源分流）
+                             // 生成期面另有独立门：dotnet run --project tools/PropGen.Tests
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

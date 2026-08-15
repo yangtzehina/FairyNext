@@ -188,7 +188,7 @@ public static class AbiMock
     /// <summary>文本串/字号/描边 —— Ch.Text</summary>
     public const byte PropGroupTextFirst = 96;
     public const byte PropGroupTextLast = 127;
-    /// <summary>x/y/scale/rotation/skew/pivot —— Ch.Transform</summary>
+    /// <summary>x/y/scale/rotation/skew/pixelSnap —— Ch.Transform</summary>
     public const byte PropGroupTransformFirst = 128;
     public const byte PropGroupTransformLast = 159;
 
@@ -207,6 +207,8 @@ public static class AbiMock
     public const byte PropIdGrayed = 66;
     /// <summary>[Visual] tint 基色（未乘 α，Color 通道从基色重乘）</summary>
     public const byte PropIdColor = 67;
+    /// <summary>[Visual] 局部可命中（worldVisual 按 AND 级联；事件平面 P0 读）</summary>
+    public const byte PropIdTouchable = 68;
     /// <summary>[Text] 字符串表 id（STRT/LANG 视图叠加后取值）</summary>
     public const byte PropIdTextId = 96;
     /// <summary>[Text] 字号（逻辑单位；度量与栅格密度解耦）</summary>
@@ -221,6 +223,10 @@ public static class AbiMock
     public const byte PropIdScaleY = 131;
     /// <summary>[Transform] 旋转（弧度，绕 pivot）</summary>
     public const byte PropIdRotation = 132;
+    /// <summary>[Transform] 剪切角（弧度，水平剪切；fork 的双值 skewX/skewY 编译期归一）</summary>
+    public const byte PropIdSkew = 133;
+    /// <summary>[Transform] 像素对齐位（不级联；存 localVisual 位段，通道归 Transform）</summary>
+    public const byte PropIdPixelSnap = 134;
 
     // ---- 编译期断言：字段首尾相接、末字段收口于结构尺寸、位域覆盖全 32 位 ----
     // 不成立即 1/0 → CS0020 编译错（L0 门：错误在跑起来之前死掉）。

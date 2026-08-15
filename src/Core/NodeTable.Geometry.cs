@@ -89,26 +89,37 @@ public sealed partial class NodeTable
 
     // ────────────────────────────────────────────────────────────────────────
     // authored 写（等值切断 + 相位门 + 来源分流，机制④⑨ / 裁决 13）
+    //
+    // **进了 PropId 空间的属性，写值与 Mark 的本体一律是生成代码**（M1-09，tools/PropGen）：
+    // Store<Prop> 只做「等值切断 + 写列」，Write<Prop> = Store + Mark(Marks<Prop>, src)，
+    // 通道位取自 src/Core/NodeProps.cs 的归属表。手写部分只剩三件本来就不该进表的东西：
+    // 解引用/相位门、类型纯度断言、成对写口的**单次** Mark（SetPosition 写两列只 Mark 一次——
+    // 同一通道 Mark 幂等，但一次调用记一条失效更贴合诊断口径）。
+    //
+    // 两个**故意留在手写**的写口，理由都不是「还没来得及」：
+    //  - SetPivot：写口带 keepPosition 的位置换算（机制⑪），不是「比较→写列」形态；pivot 也没有
+    //    gear/timeline 驱动面，未入 PropId 空间。
+    //  - SetContentRef：值是 uint 句柄不是 float，通用写口 WriteAuthored 的 float 入参表达不了它；
+    //    资产平面（M1-13）接管内容引用时一并决定它进不进 id 空间。
+    // 这两处的 Ch 是手写常量——它们是归属表**之外**仅剩的两笔账，新增第三笔前先问为什么不进表。
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>写 authored 位置（Ch.Transform）。值不变 ⇒ 不写、不 Mark。</summary>
     public void SetPosition(NodeHandle h, float x, float y, WriteSource src = WriteSource.User)
     {
         if (!ResolveForWrite(h, out uint i)) return;
-        bool changed = false;
-        if (!BitEquals.Eq(_posX[i], x)) { _posX[i] = x; changed = true; }
-        if (!BitEquals.Eq(_posY[i], y)) { _posY[i] = y; changed = true; }
-        if (changed) Mark(i, Ch.Transform, src);
+        bool cx = StoreX(i, x);
+        bool cy = StoreY(i, y);
+        if (cx || cy) Mark(i, MarksX | MarksY, src);
     }
 
     /// <summary>写 authored 尺寸（Ch.Layout——width/height 是布局输入，不是变换）。</summary>
     public void SetSize(NodeHandle h, float width, float height, WriteSource src = WriteSource.User)
     {
         if (!ResolveForWrite(h, out uint i)) return;
-        bool changed = false;
-        if (!BitEquals.Eq(_width[i], width)) { _width[i] = width; changed = true; }
-        if (!BitEquals.Eq(_height[i], height)) { _height[i] = height; changed = true; }
-        if (changed) Mark(i, Ch.Layout, src);
+        bool cw = StoreWidth(i, width);
+        bool ch = StoreHeight(i, height);
+        if (cw || ch) Mark(i, MarksWidth | MarksHeight, src);
     }
 
     /// <summary>写缩放（Ch.Transform）。Group 恒 identity 缩放（不变量 9）。</summary>
@@ -117,10 +128,9 @@ public sealed partial class NodeTable
         if (!ResolveForWrite(h, out uint i)) return;
         UiAssert.That(_typeId[i] != NodeType.Group || (scaleX == 1f && scaleY == 1f),
             "Group 纯度：typeId==Group ⇒ scaleX==scaleY==1（不变量 9）");
-        bool changed = false;
-        if (!BitEquals.Eq(_scaleX[i], scaleX)) { _scaleX[i] = scaleX; changed = true; }
-        if (!BitEquals.Eq(_scaleY[i], scaleY)) { _scaleY[i] = scaleY; changed = true; }
-        if (changed) Mark(i, Ch.Transform, src);
+        bool cx = StoreScaleX(i, scaleX);
+        bool cy = StoreScaleY(i, scaleY);
+        if (cx || cy) Mark(i, MarksScaleX | MarksScaleY, src);
     }
 
     /// <summary>写旋转（弧度，绕 pivot；Ch.Transform）。Group 恒 0（不变量 9）。</summary>
@@ -129,18 +139,14 @@ public sealed partial class NodeTable
         if (!ResolveForWrite(h, out uint i)) return;
         UiAssert.That(_typeId[i] != NodeType.Group || radians == 0f,
             "Group 纯度：typeId==Group ⇒ rotation==0（不变量 9）");
-        if (BitEquals.Eq(_rotation[i], radians)) return;
-        _rotation[i] = radians;
-        Mark(i, Ch.Transform, src);
+        WriteRotation(i, radians, src);
     }
 
     /// <summary>写剪切角（弧度，水平剪切；Ch.Transform）。</summary>
     public void SetSkew(NodeHandle h, float radians, WriteSource src = WriteSource.User)
     {
         if (!ResolveForWrite(h, out uint i)) return;
-        if (BitEquals.Eq(_skew[i], radians)) return;
-        _skew[i] = radians;
-        Mark(i, Ch.Transform, src);
+        WriteSkew(i, radians, src);
     }
 
     /// <summary>
@@ -178,28 +184,36 @@ public sealed partial class NodeTable
     public void SetAlpha(NodeHandle h, float alpha, WriteSource src = WriteSource.User)
     {
         if (!ResolveForWrite(h, out uint i)) return;
-        byte a = ToU8(alpha);
-        uint v = _localVisual[i];
-        if (Visual.Alpha(v) == a) return;
-        _localVisual[i] = Visual.WithAlpha(v, a);
-        Mark(i, Ch.Color | Ch.DownColor, src);
+        WriteAlpha(i, alpha, src);
     }
 
     /// <summary>写局部可见位（机制⑬：只改位，不摘树）。</summary>
     public void SetVisible(NodeHandle h, bool visible, WriteSource src = WriteSource.User)
-        => SetVisualBit(h, Visual.Visible, visible, Ch.Visible | Ch.DownVisible, src);
+    {
+        if (!ResolveForWrite(h, out uint i)) return;
+        WriteVisible(i, visible, src);
+    }
 
     /// <summary>写局部置灰位（worldVisual 按 OR 级联）。</summary>
     public void SetGrayed(NodeHandle h, bool grayed, WriteSource src = WriteSource.User)
-        => SetVisualBit(h, Visual.Grayed, grayed, Ch.Color | Ch.DownColor, src);
+    {
+        if (!ResolveForWrite(h, out uint i)) return;
+        WriteGrayed(i, grayed, src);
+    }
 
     /// <summary>写局部可命中位。</summary>
     public void SetTouchable(NodeHandle h, bool touchable, WriteSource src = WriteSource.User)
-        => SetVisualBit(h, Visual.Touchable, touchable, Ch.Color, src);
+    {
+        if (!ResolveForWrite(h, out uint i)) return;
+        WriteTouchable(i, touchable, src);
+    }
 
     /// <summary>写像素对齐位（不级联）。</summary>
     public void SetPixelSnap(NodeHandle h, bool snap, WriteSource src = WriteSource.User)
-        => SetVisualBit(h, Visual.PixelSnap, snap, Ch.Transform, src);
+    {
+        if (!ResolveForWrite(h, out uint i)) return;
+        WritePixelSnap(i, snap, src);
+    }
 
     /// <summary>写内容引用（资产/渲染平面用）。Group 恒 0（不变量 9）。</summary>
     public void SetContentRef(NodeHandle h, uint contentRef, WriteSource src = WriteSource.User)
@@ -222,61 +236,19 @@ public sealed partial class NodeTable
     /// <summary>
     /// 状态平面的通用内部写口（接缝：<c>WriteAuthored(n, prop, v, src)</c> 内含等值切断）。
     /// propId 取自 <see cref="Contracts.Abi.PropIds"/>。
-    /// **M1-09 的 setter codegen 接管后本 switch 由生成代码替换**——在此之前它是唯一的 PropId 分派点。
+    ///
+    /// **分派 switch 是生成代码**（M1-09）：<c>WriteAuthoredDispatch</c> 由 tools/PropGen 按
+    /// 「ABI PropId 单源 ⋈ src/Core/NodeProps.cs 归属表」发射，缺归属在**编译期**就是 FNP001 错误。
+    /// 手写部分只剩解引用与相位门——它们不是逐属性的知识，不该进表。
     /// </summary>
     /// <returns>值真的变了返回 true（= 已 Mark）。</returns>
     internal bool WriteAuthored(NodeHandle h, byte propId, float value, WriteSource src)
     {
         if (!ResolveForWrite(h, out uint i)) return false;
-        switch (propId)
-        {
-            case 1: return WriteFloat(i, ref _width[i], value, Ch.Layout, src);       // Width
-            case 2: return WriteFloat(i, ref _height[i], value, Ch.Layout, src);      // Height
-            case 64:                                                                   // Alpha
-            {
-                byte a = ToU8(value);
-                if (Visual.Alpha(_localVisual[i]) == a) return false;
-                _localVisual[i] = Visual.WithAlpha(_localVisual[i], a);
-                Mark(i, Ch.Color | Ch.DownColor, src);
-                return true;
-            }
-            case 65: return WriteVisualBit(i, Visual.Visible, value != 0f, Ch.Visible | Ch.DownVisible, src);
-            case 66: return WriteVisualBit(i, Visual.Grayed, value != 0f, Ch.Color | Ch.DownColor, src);
-            case 128: return WriteFloat(i, ref _posX[i], value, Ch.Transform, src);   // X
-            case 129: return WriteFloat(i, ref _posY[i], value, Ch.Transform, src);   // Y
-            case 130: return WriteFloat(i, ref _scaleX[i], value, Ch.Transform, src); // ScaleX
-            case 131: return WriteFloat(i, ref _scaleY[i], value, Ch.Transform, src); // ScaleY
-            case 132: return WriteFloat(i, ref _rotation[i], value, Ch.Transform, src); // Rotation
-            default:
-                UiAssert.That(false, "WriteAuthored 收到未归属的 PropId=" + propId
-                    + "（通道归属封闭：没有归属的属性不应存在 setter）");
-                return false;
-        }
+        return WriteAuthoredDispatch(i, propId, value, src);
     }
 
-    private bool WriteFloat(uint i, ref float slot, float v, Ch ch, WriteSource src)
-    {
-        if (BitEquals.Eq(slot, v)) return false;
-        slot = v;
-        Mark(i, ch, src);
-        return true;
-    }
-
-    private bool WriteVisualBit(uint i, uint bit, bool on, Ch ch, WriteSource src)
-    {
-        uint v = _localVisual[i];
-        if (((v & bit) != 0) == on) return false;
-        _localVisual[i] = on ? v | bit : v & ~bit;
-        Mark(i, ch, src);
-        return true;
-    }
-
-    private void SetVisualBit(NodeHandle h, uint bit, bool on, Ch ch, WriteSource src)
-    {
-        if (!ResolveForWrite(h, out uint i)) return;
-        WriteVisualBit(i, bit, on, ch, src);
-    }
-
+    /// <summary>α 的 u8 编码**唯一点**（生成的 AlphaU8 写口调它）。NaN 与负值一律截 0。</summary>
     private static byte ToU8(float a) =>
         !(a > 0f) ? (byte)0 : a >= 1f ? (byte)255 : (byte)(a * 255f + 0.5f);
 

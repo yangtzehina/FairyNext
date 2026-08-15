@@ -15,8 +15,13 @@ dotnet 不在 PATH：`export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.do
 ```bash
 dotnet build FairyNext.sln
 dotnet run --project tests/FairyNext.Tests   # 判定行 RESULT pass=N fail=N，fail>0 即红
+dotnet run --project tools/PropGen.Tests     # 属性 setter 生成器的行为门（同款判定行）；引 Roslyn，故不进主 runner
 dotnet run --project tools/AbiGen            # 改 src/Contracts/Abi.cs 后必跑，再提交生成物（--check 只比对不写）
 ```
+
+属性 setter 是**生成代码**（`tools/PropGen`，Roslyn 生成器按分析器接入 `FairyNext.Core`）：改属性的通道归属改
+`src/Core/NodeProps.cs` 的 `[NodeProp]` 表，加属性 id 改 `src/Contracts/Abi.cs`；ABI 有 id 而归属表缺声明 =
+**编译错 FNP001**（通道归属封闭）。生成物不入库——它随每次编译重生成，比对由生成器测试守。
 
 测试文化：自建 runner + 判定行（不引 xunit）；行为测试进 mock 后端；journey 带/golden/chaos 对照按设计书 §4.9 逐步进驻。构建产物在 `artifacts/`（ArtifactsPath，勿改——src/ 将被 Unity 以 local package 引入，包内不得出现 bin/obj）。
 

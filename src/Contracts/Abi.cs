@@ -253,7 +253,7 @@ public static class Abi
         new AbiPropGroup("Layout", 1, 63, "width/height/约束输入/autoSize —— Ch.Layout"),
         new AbiPropGroup("Visual", 64, 95, "alpha/tint/visible/grayed/touchable —— Ch.Color | Ch.Visible"),
         new AbiPropGroup("Text", 96, 127, "文本串/字号/描边 —— Ch.Text"),
-        new AbiPropGroup("Transform", 128, 159, "x/y/scale/rotation/skew/pivot —— Ch.Transform"),
+        new AbiPropGroup("Transform", 128, 159, "x/y/scale/rotation/skew/pixelSnap —— Ch.Transform"),
     };
 
     /// <summary>
@@ -268,6 +268,7 @@ public static class Abi
         new AbiPropId("Visible", 65, "Visual", "局部可见（worldVisual 按 AND 级联）"),
         new AbiPropId("Grayed", 66, "Visual", "局部置灰（worldVisual 按 OR 级联）"),
         new AbiPropId("Color", 67, "Visual", "tint 基色（未乘 α，Color 通道从基色重乘）"),
+        new AbiPropId("Touchable", 68, "Visual", "局部可命中（worldVisual 按 AND 级联；事件平面 P0 读）"),
         new AbiPropId("TextId", 96, "Text", "字符串表 id（STRT/LANG 视图叠加后取值）"),
         new AbiPropId("FontSize", 97, "Text", "字号（逻辑单位；度量与栅格密度解耦）"),
         new AbiPropId("X", 128, "Transform", "authored 位置 x（节点原点在父空间）"),
@@ -275,5 +276,7 @@ public static class Abi
         new AbiPropId("ScaleX", 130, "Transform", "缩放 x（永远只有 authored 一份）"),
         new AbiPropId("ScaleY", 131, "Transform", "缩放 y"),
         new AbiPropId("Rotation", 132, "Transform", "旋转（弧度，绕 pivot）"),
+        new AbiPropId("Skew", 133, "Transform", "剪切角（弧度，水平剪切；fork 的双值 skewX/skewY 编译期归一）"),
+        new AbiPropId("PixelSnap", 134, "Transform", "像素对齐位（不级联；存 localVisual 位段，通道归 Transform）"),
     };
 }
