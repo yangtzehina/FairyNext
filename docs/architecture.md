@@ -556,6 +556,14 @@ P7 收尾做孤岛同步（槽矩阵、visual、clip 下发）；P8 提交：每
 > **inner rect 剪枝与折叠都限于同帧（M1-11 实现期补充）。** ClipEntry 的 rect 表达在它绑定的槽的本地帧里（ABI 原文「槽本地」）。由此两条运行期规则：① **包含剪枝只在 quad 与条目同槽时进行**——跨帧比较两个矩形是拿两个坐标系比大小，而且槽一动结论就废；同帧限制让剪枝结论对槽的移动天然免疫，机制 3 的「槽动 → 重推绑定该槽的 ClipEntry」因此退化为把条目推进脏账（真实后端若预乘 rect 才需要重算），而不是每次滚动重算一遍窗口。② **折叠（子域 ∩ 外层）同样要求同帧**：跨帧折叠需要两槽的相对变换，那是 Extract（M1-13）持有 world 列时才有的信息，所以 `ClipBook` 对跨帧折叠是断言 + 计数，rect 原样保留——不假装能算。
 >
 > **`LeafRange.slack` 是写区间上界，不是额外余量（M1-11 实现期补充）。** 不变量 4 写「写区间 ⊆ `[start, start+slack)`」，于是 slack 的语义被钉死为**预留实例数**（`count ≤ slack`），不是「count 之外还有 slack 个」。预留区里的实例是真实存在的空实例（size 0、color 0、route 0），不是一段被跳过的洞——它们照常进上传区间、照常过 mock 的保留位写零检查，于是「叶变短」与「叶变长」在字节层面是同一条路径。只有请求了 slack 的叶（文本）才向上取 2 的幂，其余叶 `slack == count` 严丝合缝。
+>
+> **clip 域 id 的真值在重编那一侧，不在 worldVisual（M1-13 实现期补充）。** `worldVisual` 的高 16 位按平面一是 clip 域 id，直觉上 Extract 应该「可见性与 clip 域都从 worldVisual 取」。可见性确实如此；**域 id 不行**：它是 `ClipBook` 的分配序产物，而整流重编第一件事就是 `ClipBook.Reset()`，于是 P6 写进 worldVisual 的那个 id 描述的是**上一次分配**，重编后立刻陈旧——用它盖 `route.clipIndex` 等于让一批 quad 引用一张已经重排过的表。落地形态是：Extract 沿同一趟 paintOrder 自己推导域（DFS 前序保证父先于子，一个 `int[]` 就够，子默认 `Inherit(父域)`、有自有参数才 `Push`），`worldVisual` 的域字段留给 M1-14 的**增量**路径（那时 id 与产生它的那次重编同源）。
+>
+> **叶落位二分：轴对齐烘进 rect，含旋转的骑槽（M1-13 实现期补充）。** `QuadInstance.rect` 只有 min 角 + size，旋转/斜切在这个字段形态里不可表达——机制 5 的 transform 槽正是为此存在。Extract 因此对每个叶做一次二分：world 的 `m01/m10` 为零 ⇒ 直接把 world 烘进 rect、骑 identity 槽（绝大多数 UI 走这条，零槽消耗）；否则 ⇒ 认领一个槽、world 写槽矩阵、rect 留在叶本地帧，且**同一矩阵的兄弟复用同一个槽**（一个旋转容器下的一批叶只花一个槽）。两条配套纪律：① 烘 rect 时负缩放必须由**四角 UV 换位**承担镜像（实例流没有顶点序可翻）；② 槽荒时**不画并计数**（`ExtractReport.Unplaceable`），不硬烘一个包围盒——近似的 rect 画出的是「差一点点」的画面，比不画更难查（机制 4）。另外槽表不随 `BeginRebuild` 清空（Claim 归调用方，滚动的槽要跨重编存活），所以 Extract 自己认的槽必须在下一次重编开头自己还。
+>
+> **裁剪域的跨帧折叠沿用父窗口，并走阶梯（M1-13 实现期补充）。** 承接上一条：一个**旋转的**裁剪节点会骑自己的槽，而它的外层域可能在槽 0。折叠（子域 ∩ 外层）要求两域同帧，跨帧时 `ClipBook` 按 M1-11 的补充是断言 + 计数。Extract 侧的正确动作是**沿用父窗口**——裁得更粗但不画错，与「clip 超限 → 父窗口降级」同一条阶梯——并 append 一个降级类别 `DegradeKind.ClipCrossFrameToParent`（10），使不变量 5「预算/降级必有声」对这条路径同样成立。
+>
+> **径向填充的 aux/extra 分工：参数记录 + 求值形态（M1-13 实现期补充）。** 机制 9 定了「径向填充不落孤岛，参数进 aux/extra 由 shader 求值」，但没说哪个字段装什么。落地形态是：`aux` 是**参数记录**（method:3 | origin:3 | clockwise:1 | 保留:9 | amount:u16 定点，表在 `Abi.RadialFillAuxBits`，位移常量走 codegen），无损、可回读、进规范化哈希；`extra` 是同一组参数的**求值形态**（`center.xy` + 起始角 + 有符号扫角，单位 turns），让 shader 不必按 method 分五路。两者由 CPU 侧同一个纯函数 `RadialFill.Write` 一次写出，**只有一个写口**，因此不存在两份参数各自漂移。配套两条：① **线性填充（Horizontal/Vertical）不走 shader**——它在几何上就是把 quad 裁短，rect 与 UV 一起收缩后仍是普通实例，参考光栅照常能画；② 完成比落在 (0,1) 开区间才写 shader 参数，满格是整图、空格不发射，两端都不带 shader 分支上路。
 
 ---
 

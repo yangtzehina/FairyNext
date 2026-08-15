@@ -447,6 +447,22 @@ public sealed partial class NodeTable
     /// <summary>局部可见位（下行通道「隐藏子树免下钻」的判据；读的是 localVisual 而非级联值）。</summary>
     internal bool IsIndexVisible(uint index) => (_localVisual[index] & Visual.Visible) != 0;
 
+    // ── 派生列的下标读（渲染平面 Extract 沿 paintOrder 走全表，每步句柄化太贵）──
+    // 与上面几个拓扑读同一条纪律：**只读**，且只在 P6 排水之后有意义（不变量 6）。
+
+    /// <summary>级联视觉的下标读（Extract 取可见/α/置灰三元）。</summary>
+    internal uint WorldVisualAt(uint index) => _worldVisual[index];
+
+    /// <summary>世界变换的下标读（Extract 把叶几何烘到槽帧、或据此决定要不要认领槽）。</summary>
+    internal ref readonly Affine2D WorldAt(uint index) => ref _world[index];
+
+    /// <summary>resolved 几何的下标读（渲染与命中读的唯一几何；resolvedRef==0 时即 authored 同一存储）。</summary>
+    internal void ResolvedAt(uint index, out float x, out float y, out float w, out float h) =>
+        ReadResolvedCore(index, out x, out y, out w, out h);
+
+    /// <summary>类型 id 的下标读。</summary>
+    internal ushort TypeAt(uint index) => _typeId[index];
+
     /// <summary>下标是否指向活槽（下标路径的 DEAD 校验；句柄路径仍走 <see cref="TryResolve"/>）。</summary>
     internal bool IsIndexAlive(uint index) =>
         index != NoIndex && index < (uint)_capacity && (_slot[index] & SlotFlags.Dead) == 0;

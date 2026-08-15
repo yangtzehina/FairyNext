@@ -30,6 +30,10 @@ public static partial class Program
                              // 用例在 MockBackendTests.cs（partial）——L2 行为门与 L3 回放门的宿主
         RenderStreamSuite(); // M1-11 RenderStream 核心（CPU 镜像 SoA / 段键 / SlotTable / ClipBook /
                              // 颜色 tier / 提交路径），用例在 RenderStreamTests.cs（partial）
+        LeafEmitterSuite();  // M1-13 叶发射器（九宫格切片与 UV / 线性与径向填充 / 填充参数的 aux-extra
+                             // 位布局）+ QuadReassembler 移植件，用例在 LeafEmitterTests.cs（partial）
+        ExtractSuite();      // M1-13 Extract（paintOrder 遍历 → 相邻性排序 → 切段）与
+                             // Structure 通道的整流重编，用例在 ExtractTests.cs（partial）
         FuiReaderSuite();    // M1-12 .fui 前端读取器（ByteBuffer 移植 + 包/组件/显示列表解析）：
                              // 对 tests/fixtures/fui 的真实样例包做字段级对照（对照物 = 编辑器授权 XML），
                              // 用例在 FuiReaderTests.cs（partial）

@@ -22,6 +22,7 @@ public static class AbiGenerator
     private const string ClipPrefix = "Clip";
     private const string RoutePrefix = "Route";
     private const string FlagsPrefix = "Flags";
+    private const string RadialFillPrefix = "RadialFill";
 
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
@@ -113,6 +114,8 @@ public static class AbiGenerator
 
         EmitHlslBits(o, RoutePrefix, "route", Abi.RouteBits, "route 位域（QuadInstance.route）");
         EmitHlslBits(o, FlagsPrefix, "flags", Abi.QuadFlagBits, "flags 位域（QuadInstance.flags）");
+        EmitHlslBits(o, RadialFillPrefix, "aux", Abi.RadialFillAuxBits,
+            "aux 位域（QuadInstance.aux，仅 flags.radialFill 置位时有效）");
 
         o.Line("#endif // FAIRYNEXT_ABI_G_HLSL");
         return o.ToString();
@@ -138,6 +141,7 @@ public static class AbiGenerator
         EmitCsFields(o, I, ClipPrefix, "ClipEntry 字段（48B）", Abi.ClipEntryFields);
         EmitCsBits(o, I, RoutePrefix, "route", "route 位域", Abi.RouteBits);
         EmitCsBits(o, I, FlagsPrefix, "flags", "flags 位域", Abi.QuadFlagBits);
+        EmitCsBits(o, I, RadialFillPrefix, "aux", "aux 位域（仅 flags.radialFill 置位时有效）", Abi.RadialFillAuxBits);
         EmitCsPropIds(o, I);
         EmitCsAsserts(o, I);
 
@@ -231,6 +235,7 @@ public static class AbiGenerator
         EmitFieldAsserts(o, indent, ClipPrefix, Abi.ClipEntryFields, "ClipEntrySize");
         EmitBitAsserts(o, indent, RoutePrefix, Abi.RouteBits);
         EmitBitAsserts(o, indent, FlagsPrefix, Abi.QuadFlagBits);
+        EmitBitAsserts(o, indent, RadialFillPrefix, Abi.RadialFillAuxBits);
         o.Line();
     }
 
@@ -280,6 +285,7 @@ public static class AbiGenerator
         EmitVerifyFields(o, I2, ClipPrefix, "Abi.ClipEntryFields", Abi.ClipEntryFields);
         EmitVerifyBits(o, I2, RoutePrefix, "Abi.RouteBits", Abi.RouteBits);
         EmitVerifyBits(o, I2, FlagsPrefix, "Abi.QuadFlagBits", Abi.QuadFlagBits);
+        EmitVerifyBits(o, I2, RadialFillPrefix, "Abi.RadialFillAuxBits", Abi.RadialFillAuxBits);
 
         o.Line(I2 + "if (Abi.PropGroups.Length != " + Inv(Abi.PropGroups.Length) + ") return \"Abi.PropGroups 表长与生成物不符\";");
         for (int i = 0; i < Abi.PropGroups.Length; i++)

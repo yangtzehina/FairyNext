@@ -178,6 +178,40 @@ public static class AbiLayout
     /// <summary>取 flags.reservedHigh。</summary>
     public static uint FlagsReservedHigh(uint flags) => (flags >> FlagsReservedHighShift) & FlagsReservedHighMask;
 
+    // ---- aux 位域（仅 flags.radialFill 置位时有效）（表覆盖全 32 位；保留位写零）----
+    /// <summary>b0-2：FillMethod：1 水平 2 垂直 3 Radial90 4 Radial180 5 Radial360（0 = 无填充）</summary>
+    public const int RadialFillMethodShift = 0;
+    public const int RadialFillMethodBits = 3;
+    public const uint RadialFillMethodMask = 0x7u;
+    /// <summary>b3-5：起点，按 method 解释（Origin90 / Origin180 / Origin360）</summary>
+    public const int RadialFillOriginShift = 3;
+    public const int RadialFillOriginBits = 3;
+    public const uint RadialFillOriginMask = 0x7u;
+    /// <summary>b6：1 = 顺时针（屏幕视觉；全链路 y 向下）</summary>
+    public const int RadialFillClockwiseShift = 6;
+    public const int RadialFillClockwiseBits = 1;
+    public const uint RadialFillClockwiseMask = 0x1u;
+    /// <summary>b7-15：保留，写零（append-only：新位域从此处切）</summary>
+    public const int RadialFillReservedShift = 7;
+    public const int RadialFillReservedBits = 9;
+    public const uint RadialFillReservedMask = 0x1FFu;
+    /// <summary>b16-31：完成比 u16 定点 = round(amount × 65535)</summary>
+    public const int RadialFillAmountShift = 16;
+    public const int RadialFillAmountBits = 16;
+    public const uint RadialFillAmountMask = 0xFFFFu;
+
+    // ---- aux 位域（仅 flags.radialFill 置位时有效） 取值（与 HLSL 侧同名宏逐字对应）----
+    /// <summary>取 aux.method。</summary>
+    public static uint RadialFillMethod(uint aux) => (aux >> RadialFillMethodShift) & RadialFillMethodMask;
+    /// <summary>取 aux.origin。</summary>
+    public static uint RadialFillOrigin(uint aux) => (aux >> RadialFillOriginShift) & RadialFillOriginMask;
+    /// <summary>取 aux.clockwise。</summary>
+    public static uint RadialFillClockwise(uint aux) => (aux >> RadialFillClockwiseShift) & RadialFillClockwiseMask;
+    /// <summary>取 aux.reserved。</summary>
+    public static uint RadialFillReserved(uint aux) => (aux >> RadialFillReservedShift) & RadialFillReservedMask;
+    /// <summary>取 aux.amount。</summary>
+    public static uint RadialFillAmount(uint aux) => (aux >> RadialFillAmountShift) & RadialFillAmountMask;
+
     // ---- PropId 分组（组间 gap 供 append-only 增长；id 0 = None 哨兵）----
     /// <summary>width/height/约束输入/autoSize —— Ch.Layout</summary>
     public const byte PropGroupLayoutFirst = 1;
@@ -256,6 +290,11 @@ public static class AbiLayout
     private const int AssertFlagsBorderW = 1 / ((FlagsBorderWShift + FlagsBorderWBits == FlagsTexSlotSpareShift) ? 1 : 0);
     private const int AssertFlagsTexSlotSpare = 1 / ((FlagsTexSlotSpareShift + FlagsTexSlotSpareBits == FlagsReservedHighShift) ? 1 : 0);
     private const int AssertFlagsReservedHigh = 1 / ((FlagsReservedHighShift + FlagsReservedHighBits == 32) ? 1 : 0);
+    private const int AssertRadialFillMethod = 1 / ((RadialFillMethodShift + RadialFillMethodBits == RadialFillOriginShift) ? 1 : 0);
+    private const int AssertRadialFillOrigin = 1 / ((RadialFillOriginShift + RadialFillOriginBits == RadialFillClockwiseShift) ? 1 : 0);
+    private const int AssertRadialFillClockwise = 1 / ((RadialFillClockwiseShift + RadialFillClockwiseBits == RadialFillReservedShift) ? 1 : 0);
+    private const int AssertRadialFillReserved = 1 / ((RadialFillReservedShift + RadialFillReservedBits == RadialFillAmountShift) ? 1 : 0);
+    private const int AssertRadialFillAmount = 1 / ((RadialFillAmountShift + RadialFillAmountBits == 32) ? 1 : 0);
 
     /// <summary>
     /// 定义点交叉校验：本文件常量 vs <see cref="Abi"/> 数据表。null = 一致；
@@ -310,6 +349,12 @@ public static class AbiLayout
         if (Abi.QuadFlagBits[6].Shift != FlagsBorderWShift || Abi.QuadFlagBits[6].Width != FlagsBorderWBits) return "FlagsBorderW 位域与生成物不符";
         if (Abi.QuadFlagBits[7].Shift != FlagsTexSlotSpareShift || Abi.QuadFlagBits[7].Width != FlagsTexSlotSpareBits) return "FlagsTexSlotSpare 位域与生成物不符";
         if (Abi.QuadFlagBits[8].Shift != FlagsReservedHighShift || Abi.QuadFlagBits[8].Width != FlagsReservedHighBits) return "FlagsReservedHigh 位域与生成物不符";
+        if (Abi.RadialFillAuxBits.Length != 5) return "Abi.RadialFillAuxBits 表长与生成物不符";
+        if (Abi.RadialFillAuxBits[0].Shift != RadialFillMethodShift || Abi.RadialFillAuxBits[0].Width != RadialFillMethodBits) return "RadialFillMethod 位域与生成物不符";
+        if (Abi.RadialFillAuxBits[1].Shift != RadialFillOriginShift || Abi.RadialFillAuxBits[1].Width != RadialFillOriginBits) return "RadialFillOrigin 位域与生成物不符";
+        if (Abi.RadialFillAuxBits[2].Shift != RadialFillClockwiseShift || Abi.RadialFillAuxBits[2].Width != RadialFillClockwiseBits) return "RadialFillClockwise 位域与生成物不符";
+        if (Abi.RadialFillAuxBits[3].Shift != RadialFillReservedShift || Abi.RadialFillAuxBits[3].Width != RadialFillReservedBits) return "RadialFillReserved 位域与生成物不符";
+        if (Abi.RadialFillAuxBits[4].Shift != RadialFillAmountShift || Abi.RadialFillAuxBits[4].Width != RadialFillAmountBits) return "RadialFillAmount 位域与生成物不符";
         if (Abi.PropGroups.Length != 4) return "Abi.PropGroups 表长与生成物不符";
         if (Abi.PropGroups[0].First != PropGroupLayoutFirst || Abi.PropGroups[0].Last != PropGroupLayoutLast) return "分组 Layout 区间与生成物不符";
         if (Abi.PropGroups[1].First != PropGroupVisualFirst || Abi.PropGroups[1].Last != PropGroupVisualLast) return "分组 Visual 区间与生成物不符";

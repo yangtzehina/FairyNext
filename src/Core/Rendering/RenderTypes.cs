@@ -581,6 +581,13 @@ public enum DegradeKind : byte
     BlobToExtract = 8,
     /// <summary>滤镜域内含孤岛 → 退化为「可见即每帧重捕获」。</summary>
     FilterEveryFrame = 9,
+    /// <summary>
+    /// 子裁剪域与外层域不在同一帧（子域骑自己的槽）→ 沿用父窗口（M1-13 补）。
+    /// 折叠 <c>子域 ∩ 外层</c> 需要两槽的相对变换，而 ClipEntry 的 rect 按 ABI 只表达在
+    /// **它自己绑的槽**的本地帧里；跨帧折叠是拿两个坐标系比大小（架构平面三 M1-11 实现期补充②）。
+    /// 沿用父窗口 = 裁得更粗但不画错，与「clip 超限 → 父窗口降级」同一条阶梯。
+    /// </summary>
+    ClipCrossFrameToParent = 10,
 }
 
 /// <summary>

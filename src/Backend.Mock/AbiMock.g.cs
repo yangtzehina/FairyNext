@@ -180,6 +180,40 @@ public static class AbiMock
     /// <summary>取 flags.reservedHigh。</summary>
     public static uint FlagsReservedHigh(uint flags) => (flags >> FlagsReservedHighShift) & FlagsReservedHighMask;
 
+    // ---- aux 位域（仅 flags.radialFill 置位时有效）（表覆盖全 32 位；保留位写零）----
+    /// <summary>b0-2：FillMethod：1 水平 2 垂直 3 Radial90 4 Radial180 5 Radial360（0 = 无填充）</summary>
+    public const int RadialFillMethodShift = 0;
+    public const int RadialFillMethodBits = 3;
+    public const uint RadialFillMethodMask = 0x7u;
+    /// <summary>b3-5：起点，按 method 解释（Origin90 / Origin180 / Origin360）</summary>
+    public const int RadialFillOriginShift = 3;
+    public const int RadialFillOriginBits = 3;
+    public const uint RadialFillOriginMask = 0x7u;
+    /// <summary>b6：1 = 顺时针（屏幕视觉；全链路 y 向下）</summary>
+    public const int RadialFillClockwiseShift = 6;
+    public const int RadialFillClockwiseBits = 1;
+    public const uint RadialFillClockwiseMask = 0x1u;
+    /// <summary>b7-15：保留，写零（append-only：新位域从此处切）</summary>
+    public const int RadialFillReservedShift = 7;
+    public const int RadialFillReservedBits = 9;
+    public const uint RadialFillReservedMask = 0x1FFu;
+    /// <summary>b16-31：完成比 u16 定点 = round(amount × 65535)</summary>
+    public const int RadialFillAmountShift = 16;
+    public const int RadialFillAmountBits = 16;
+    public const uint RadialFillAmountMask = 0xFFFFu;
+
+    // ---- aux 位域（仅 flags.radialFill 置位时有效） 取值（与 HLSL 侧同名宏逐字对应）----
+    /// <summary>取 aux.method。</summary>
+    public static uint RadialFillMethod(uint aux) => (aux >> RadialFillMethodShift) & RadialFillMethodMask;
+    /// <summary>取 aux.origin。</summary>
+    public static uint RadialFillOrigin(uint aux) => (aux >> RadialFillOriginShift) & RadialFillOriginMask;
+    /// <summary>取 aux.clockwise。</summary>
+    public static uint RadialFillClockwise(uint aux) => (aux >> RadialFillClockwiseShift) & RadialFillClockwiseMask;
+    /// <summary>取 aux.reserved。</summary>
+    public static uint RadialFillReserved(uint aux) => (aux >> RadialFillReservedShift) & RadialFillReservedMask;
+    /// <summary>取 aux.amount。</summary>
+    public static uint RadialFillAmount(uint aux) => (aux >> RadialFillAmountShift) & RadialFillAmountMask;
+
     // ---- PropId 分组（组间 gap 供 append-only 增长；id 0 = None 哨兵）----
     /// <summary>width/height/约束输入/autoSize —— Ch.Layout</summary>
     public const byte PropGroupLayoutFirst = 1;
@@ -258,5 +292,10 @@ public static class AbiMock
     private const int AssertFlagsBorderW = 1 / ((FlagsBorderWShift + FlagsBorderWBits == FlagsTexSlotSpareShift) ? 1 : 0);
     private const int AssertFlagsTexSlotSpare = 1 / ((FlagsTexSlotSpareShift + FlagsTexSlotSpareBits == FlagsReservedHighShift) ? 1 : 0);
     private const int AssertFlagsReservedHigh = 1 / ((FlagsReservedHighShift + FlagsReservedHighBits == 32) ? 1 : 0);
+    private const int AssertRadialFillMethod = 1 / ((RadialFillMethodShift + RadialFillMethodBits == RadialFillOriginShift) ? 1 : 0);
+    private const int AssertRadialFillOrigin = 1 / ((RadialFillOriginShift + RadialFillOriginBits == RadialFillClockwiseShift) ? 1 : 0);
+    private const int AssertRadialFillClockwise = 1 / ((RadialFillClockwiseShift + RadialFillClockwiseBits == RadialFillReservedShift) ? 1 : 0);
+    private const int AssertRadialFillReserved = 1 / ((RadialFillReservedShift + RadialFillReservedBits == RadialFillAmountShift) ? 1 : 0);
+    private const int AssertRadialFillAmount = 1 / ((RadialFillAmountShift + RadialFillAmountBits == 32) ? 1 : 0);
 
 }

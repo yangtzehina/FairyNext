@@ -247,6 +247,29 @@ public static class Abi
     };
 
     /// <summary>
+    /// <c>QuadInstance.aux</c> 在 <c>flags.radialFill</c> 置位时的位域（u32，表须覆盖全 32 位）。
+    ///
+    /// 径向填充（技能 CD）**不落孤岛**（v1.3 裁决 / 渲染平面机制 9）：参数进实例、由 shader 求值。
+    /// 于是「一屏 40 个技能图标各转各的 CD」是 40 个普通实例，而不是 40 个栅栏。
+    ///
+    /// 本表是**参数记录**（作者意图的无损回读面：dump / 金样 / 诊断），
+    /// <c>extra</c> 存的是同一组参数的**求值形态**（中心 + 起角 + 有符号扫角，见 <c>RadialFill</c>），
+    /// 让 shader 不必按 method 分五路。两者由 CPU 侧同一个纯函数一次写出——**只有一个写口**，
+    /// 因此不存在「两份参数各自漂移」。
+    ///
+    /// amount 走 u16 定点而非 f32：填充比是 0..1 的进度量，65535 级远细于任何屏幕上可分辨的角度，
+    /// 而定点值在规范化流哈希里是稳定的位（f32 的最低位会随求值路径抖动，金样就此变成本机绿）。
+    /// </summary>
+    public static readonly AbiBitField[] RadialFillAuxBits =
+    {
+        new AbiBitField("Method", 0, 3, "FillMethod：1 水平 2 垂直 3 Radial90 4 Radial180 5 Radial360（0 = 无填充）"),
+        new AbiBitField("Origin", 3, 3, "起点，按 method 解释（Origin90 / Origin180 / Origin360）"),
+        new AbiBitField("Clockwise", 6, 1, "1 = 顺时针（屏幕视觉；全链路 y 向下）"),
+        new AbiBitField("Reserved", 7, 9, "保留，写零（append-only：新位域从此处切）"),
+        new AbiBitField("Amount", 16, 16, "完成比 u16 定点 = round(amount × 65535)"),
+    };
+
+    /// <summary>
     /// PropId 分组区间。分组之间留 gap 供增长；id 0 保留为 None 哨兵。
     /// 注意与 <see cref="MaxObservableProps"/> 的区别：PropId 是**节点属性 id 空间**（u8，分组编号），
     /// 64 位硬顶约束的是 VM 可观测属性的**位下标**，两者不是同一编号空间。
