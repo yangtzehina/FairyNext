@@ -154,6 +154,8 @@ public static class Abi
     // ---- 顶点流后端预算（fork 实测水位起步，溢出走阶梯降级 + 诊断高水位）----
     public const int TransformSlotBudget = 32;     // 槽 0 = identity
     public const int ClipEntryBudget = 16;         // Inherited/Owned 继承共享后按「裁剪域数」计（v1.3）
+    public const int GpuFenceDepth = 4;            // 释放缓冲入 pending 队列，CPU fence 到期才真释放（v1.1）；
+                                                   // WebGL2 无 fence，同一深度改按帧环形缓冲轮转
 
     // ---- 状态层（设计书 §4.4）----
     public const int MaxObservableProps = 64;      // 64bit 脏掩码硬顶：超出 = 编译错误，不做多 word 回退（v1.1）
@@ -180,6 +182,7 @@ public static class Abi
         new AbiScalar("ShaderAbiVersion", ShaderAbiVersion, false, AbiScope.All, "实例布局变更必 bump——后端启动时比对"),
         new AbiScalar("TransformSlotBudget", TransformSlotBudget, false, AbiScope.All, "槽 0 = identity；溢出 → 该容器退 tier-2 重写 + 高水位"),
         new AbiScalar("ClipEntryBudget", ClipEntryBudget, false, AbiScope.All, "按裁剪域数计；溢出 → 父窗口降级 + 警告"),
+        new AbiScalar("GpuFenceDepth", GpuFenceDepth, false, AbiScope.CSharp, "GPU 缓冲回收的 pending 队列深度上限；超深 = 门不过"),
         new AbiScalar("MaxObservableProps", MaxObservableProps, false, AbiScope.CSharp, "64bit 脏掩码硬顶；超出 = 编译错误"),
         new AbiScalar("CommandWaveLimit", CommandWaveLimit, false, AbiScope.CSharp, "P3 波次上限"),
         new AbiScalar("LayoutMicroDrainLimit", LayoutMicroDrainLimit, false, AbiScope.CSharp, "P5 兜底微排水轮次"),

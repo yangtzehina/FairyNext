@@ -26,6 +26,8 @@ public static partial class Program
         UiKernelSuite();     // M1-08 相位机 + Clock（时间宪法不变量 9/10/11/14），用例在 UiKernelTests.cs（partial）
         NodePropsSuite();    // M1-09 setter codegen 的运行期面（归属表自洽 / 逐 PropId 等值切断 / 来源分流）
                              // 生成期面另有独立门：dotnet run --project tools/PropGen.Tests
+        MockBackendSuite();  // M1-10 mock 后端 + 参考光栅 + 规范化流哈希 + GateReport 七字段，
+                             // 用例在 MockBackendTests.cs（partial）——L2 行为门与 L3 回放门的宿主
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

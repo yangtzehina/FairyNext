@@ -40,6 +40,8 @@ public static class AbiLayout
     public const int TransformSlotBudget = 32;
     /// <summary>按裁剪域数计；溢出 → 父窗口降级 + 警告</summary>
     public const int ClipEntryBudget = 16;
+    /// <summary>GPU 缓冲回收的 pending 队列深度上限；超深 = 门不过</summary>
+    public const int GpuFenceDepth = 4;
     /// <summary>64bit 脏掩码硬顶；超出 = 编译错误</summary>
     public const int MaxObservableProps = 64;
     /// <summary>P3 波次上限</summary>
@@ -261,7 +263,7 @@ public static class AbiLayout
     /// </summary>
     public static string? Verify()
     {
-        if (Abi.Scalars.Length != 15) return "Abi.Scalars 表长与生成物不符";
+        if (Abi.Scalars.Length != 16) return "Abi.Scalars 表长与生成物不符";
         if (Abi.Scalars[0].Value != FgbMagic) return "标量 FgbMagic 与生成物不符";
         if (Abi.Scalars[1].Value != FgbFormatVersion) return "标量 FgbFormatVersion 与生成物不符";
         if (Abi.Scalars[2].Value != FgbSectionAlignment) return "标量 FgbSectionAlignment 与生成物不符";
@@ -274,9 +276,10 @@ public static class AbiLayout
         if (Abi.Scalars[9].Value != ShaderAbiVersion) return "标量 ShaderAbiVersion 与生成物不符";
         if (Abi.Scalars[10].Value != TransformSlotBudget) return "标量 TransformSlotBudget 与生成物不符";
         if (Abi.Scalars[11].Value != ClipEntryBudget) return "标量 ClipEntryBudget 与生成物不符";
-        if (Abi.Scalars[12].Value != MaxObservableProps) return "标量 MaxObservableProps 与生成物不符";
-        if (Abi.Scalars[13].Value != CommandWaveLimit) return "标量 CommandWaveLimit 与生成物不符";
-        if (Abi.Scalars[14].Value != LayoutMicroDrainLimit) return "标量 LayoutMicroDrainLimit 与生成物不符";
+        if (Abi.Scalars[12].Value != GpuFenceDepth) return "标量 GpuFenceDepth 与生成物不符";
+        if (Abi.Scalars[13].Value != MaxObservableProps) return "标量 MaxObservableProps 与生成物不符";
+        if (Abi.Scalars[14].Value != CommandWaveLimit) return "标量 CommandWaveLimit 与生成物不符";
+        if (Abi.Scalars[15].Value != LayoutMicroDrainLimit) return "标量 LayoutMicroDrainLimit 与生成物不符";
         if (Abi.QuadInstanceFields.Length != 8) return "Abi.QuadInstanceFields 表长与生成物不符";
         if (Abi.QuadInstanceFields[0].Offset != QuadRectOffset || Abi.QuadInstanceFields[0].Size != QuadRectSize) return "QuadRect 偏移/大小与生成物不符";
         if (Abi.QuadInstanceFields[1].Offset != QuadUvAOffset || Abi.QuadInstanceFields[1].Size != QuadUvASize) return "QuadUvA 偏移/大小与生成物不符";

@@ -42,6 +42,8 @@ public static class AbiMock
     public const int TransformSlotBudget = 32;
     /// <summary>按裁剪域数计；溢出 → 父窗口降级 + 警告</summary>
     public const int ClipEntryBudget = 16;
+    /// <summary>GPU 缓冲回收的 pending 队列深度上限；超深 = 门不过</summary>
+    public const int GpuFenceDepth = 4;
     /// <summary>64bit 脏掩码硬顶；超出 = 编译错误</summary>
     public const int MaxObservableProps = 64;
     /// <summary>P3 波次上限</summary>

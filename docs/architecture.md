@@ -545,6 +545,12 @@ P7 收尾做孤岛同步（槽矩阵、visual、clip 下发）；P8 提交：每
 18. **像素对照门**：同一 FGB + 同一操作序列，本运行时 vs 旧 fork 参考实现逐像素对照（容差明文）；降级阶梯每一级各有专属对照用例——「无一级画错」由门保证。
 19. **volatile 趋势门**：volatile 槽「实际未变帧」占比锁存进 FrameStats，阈值超限 CI 警告（非断言）。
 
+> **不变量 14 的执法形态：帧括号 + 显式主表面绑定点 + 依赖边声明（M1-10 实现期补充）。** 文档写「全部离屏 pass 前置于主表面绑定之前」，但没有绑定点就没有「之前」可言——真实后端里主表面往往在第一次 draw 时隐式绑定，那条时序契约就无从判定。落地形态是三件：① `IRenderBackend.BeginFrame(frameId)` / `EndFrame(stats)` 把一帧的提交括起来（建流/销毁流在括号外，流的生命周期本就跨帧）；② `BindMainSurface(surface)` 是**显式**的、一帧一次的绑定点，此后再 `BeginOffscreenPass` 即断言 + 计一次 `phaseViolation`；③ `OffscreenPassDesc.Consumer` 声明「谁消费本 pass 的结果」（`PassHandle.None` = 主表面），于是「capture 依赖序内层先」变成一条可机检的边——被消费者提交时若消费者已提交，即断言。`PassHandle.None` 同时兼作 `DrawStream` 的主表面目标，「画到 RT」与「画到屏幕」因此是同一个参数的两个取值，而不是两条容易走散的 API。
+>
+> **fence 深度进 ABI 单源（M1-10 实现期补充）。** 机制 13 的「≤4」原本只活在文中；它与槽 32 / ClipEntry 16 是同一类东西——跨后端共享的预算水位，于是落为 `Abi.GpuFenceDepth`（CSharp 域，HLSL 不需要）。Unity 段后端（M1-15）与 WebGL2 环形缓冲（M3-03）读同一个常量，mock 后端按它执法「pending 队列超深即 `fencePending` 非零」。
+>
+> **接口与 ABI 结构住 `src/Core/Rendering/`，不住任一后端工程（M1-10 实现期补充）。** `IRenderBackend`、`QuadInstance`/`ClipEntry`/`SlotEntry`/`SegmentDesc`/`RunOrder`/`StreamSnapshot` 是 RenderStream（M1-11）与三个后端之间的共同货币；放进 mock 工程会逼 Unity 后端引用 mock，打包时把行为门一起带进游戏。同处还有 `NullBackend`——「未装后端」不是一个状态：FgbCompiler = 无头运行时要在无 GPU 进程里跑完 P0–P9，挂 `NullBackend` 使无 GPU 路径是**被测过的**那条路径，而不是散落各处的 null 检查。运行时结构与 ABI 生成物的关系是「声明 vs 执法」：结构体带 `[StructLayout(Size = Abi.QuadInstanceSize)]`（字段涨过 80B = 类型加载期就炸），偏移由单测按生成物的偏移表逐字段回读比对——ABI 生成物自洽不等于 C# 结构体照着它排。
+
 ---
 
 ## 平面四 A · 语义系统：状态与布局
@@ -1328,6 +1334,12 @@ abi   QuadInstance 80B  rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 e
 15. **[门]** bench 报告缺 gitRev/backendVer/帧预算/样本数任一字段 → CI 拒收。
 16. **[结构性]** 输入带轨道为封闭枚举，派生数据无轨道可写；回放期重算的命中结果与录制时诊断一致（debug 断言）。
 17. **[硬基准门]** 1000 活跃 tween/帧 < 0.2ms（纯 tween 直写小道的存在性证明，随 bench 仪器化复跑）。
+
+> **门计数与协议违约是两级失败，不要混（M1-10 实现期补充）。** `GateReport` 七字段计的是「**走了降级路径**」——画对了不等于走对了，槽荒退 tier-2、clip 超限降父窗口、材质拒绝走 scissor 都能把像素画对同时把性能路径换掉。而 use-after-free、axis-aligned 位与矩阵不一致、帧括号错序、ABI 保留位非零属于「**协议破了**」，它们进 `MockBackend.Violations` 而不是七字段。两级分开有一条硬理由：`UiAssert.That` 是 `[Conditional("DEBUG")]`，release 配置下调用点整体消失——若断言是唯一记录，release 里跑的门就是空跑，所以违约必须另有一份无条件的列表。捆绑门查两者：`report.Pass && backend.Violations.Count == 0`。唯一的跨界映射是**离屏 pass 序违约计进 `phaseViolation`**：它与 P7/P8 违约写是同一类错误——在错的时刻做对的事。
+>
+> **参考光栅三规则的覆盖边界（M1-10 实现期补充）。** 三规则（整数色彩 / 整数边函数 / f32 仅线性插值）覆盖的是 rect + uv + 直通色 + alpha 混合 + grayed + fontAlpha，加轴对齐 clip 窗；**不覆盖** SDF 描边、曲线字形、径向填充、圆角 mask、clip 软边、旋转裁剪域——它们要么需要超越函数（当场违反规则 3），要么需要与 shader 逐行对齐（那就成了第二份可能不一致的实现）。这些归 L4 像素门与 oracle 对拍，参考光栅明文不接。规则 3 由一条**扫源码**的单测机械执法（剥注释后不得出现 `Math`/`double`/`sqrt`/三角函数记号）：「同输入两跑相等」在单机上永远成立，跨 CPU 一致靠的是这条源码纪律，不是那条自反测试。整数除 255 统一走 `(v+128 + ((v+128)>>8)) >> 8`（v ∈ [0,65535] 时精确等于 round(v/255)），覆盖判定用 top-left 填充规则，于是共享对角线恰被两个三角形之一覆盖——不裂缝也不双写。
+>
+> **规范化流哈希的剔除清单（M1-10 实现期补充）。** `Trace.streamHash` 的「剔除非语义位」落为四条：① `route.slot` / `route.clipIndex` 的原始数值换成**首用序重编号**的规范 id，槽表与 clip 表按同一编号重排——谁分到 3 号槽是分配器的事；② **未被引用的槽/clip 条目不进哈希**（分配残留再多也不改一个像素）；③ `SlotEntry.Owner`（含代际的句柄）、`WriteFreq`（升格侦测计数）、`ClipEntry._pad`、route 保留位、后端原生句柄与 `DebugName` 一律缺席；④ float 按**原始位**写入（+0/−0 与 NaN payload 都算差异）——这与等值切断的 `BitEquals` 语义故意相反：切断为了少置一次脏，规范化为了对拍两条路径，后者宁可多报也不能吃掉差异。同一份规范化字节既出哈希也出 diff（`FirstDifference` 给首差异偏移），因此「哈希说不等」与「diff 指出的位置」永远是同一个事实，而不是两份各自实现的账。
 
 ### 验证金字塔总图
 
