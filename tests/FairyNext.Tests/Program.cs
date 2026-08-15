@@ -28,6 +28,8 @@ public static partial class Program
                              // 生成期面另有独立门：dotnet run --project tools/PropGen.Tests
         MockBackendSuite();  // M1-10 mock 后端 + 参考光栅 + 规范化流哈希 + GateReport 七字段，
                              // 用例在 MockBackendTests.cs（partial）——L2 行为门与 L3 回放门的宿主
+        RenderStreamSuite(); // M1-11 RenderStream 核心（CPU 镜像 SoA / 段键 / SlotTable / ClipBook /
+                             // 颜色 tier / 提交路径），用例在 RenderStreamTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

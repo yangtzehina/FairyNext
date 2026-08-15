@@ -550,6 +550,12 @@ P7 收尾做孤岛同步（槽矩阵、visual、clip 下发）；P8 提交：每
 > **fence 深度进 ABI 单源（M1-10 实现期补充）。** 机制 13 的「≤4」原本只活在文中；它与槽 32 / ClipEntry 16 是同一类东西——跨后端共享的预算水位，于是落为 `Abi.GpuFenceDepth`（CSharp 域，HLSL 不需要）。Unity 段后端（M1-15）与 WebGL2 环形缓冲（M3-03）读同一个常量，mock 后端按它执法「pending 队列超深即 `fencePending` 非零」。
 >
 > **接口与 ABI 结构住 `src/Core/Rendering/`，不住任一后端工程（M1-10 实现期补充）。** `IRenderBackend`、`QuadInstance`/`ClipEntry`/`SlotEntry`/`SegmentDesc`/`RunOrder`/`StreamSnapshot` 是 RenderStream（M1-11）与三个后端之间的共同货币；放进 mock 工程会逼 Unity 后端引用 mock，打包时把行为门一起带进游戏。同处还有 `NullBackend`——「未装后端」不是一个状态：FgbCompiler = 无头运行时要在无 GPU 进程里跑完 P0–P9，挂 `NullBackend` 使无 GPU 路径是**被测过的**那条路径，而不是散落各处的 null 检查。运行时结构与 ABI 生成物的关系是「声明 vs 执法」：结构体带 `[StructLayout(Size = Abi.QuadInstanceSize)]`（字段涨过 80B = 类型加载期就炸），偏移由单测按生成物的偏移表逐字段回读比对——ABI 生成物自洽不等于 C# 结构体照着它排。
+>
+> **两条预算的口径：条目表长度，不是可分配数（M1-11 实现期补充）。** `Abi.ClipEntryBudget = 16` 与 `Abi.TransformSlotBudget = 32` 计的是**条目表长度**（各含一条哨兵：clip 条目 0 = None、槽 0 = identity），于是可分配的是 15 个自有裁剪域与 31 个热点槽。理由是执法点在后端：mock 按 `UploadClips` 的条目数与 `WriteSlots` 的下标执法，CPU 侧若另立「16 个可分配域」的口径，就会出现「CPU 认为没超、后端认为超了」的两本账——预算这种东西，两本账比紧一条更贵。v1.3 的「按裁剪域数计而非节点数计」说的是**什么填满这 16 条**（100 个节点共用一个域仍是 1 条），不是哨兵怎么算。
+>
+> **inner rect 剪枝与折叠都限于同帧（M1-11 实现期补充）。** ClipEntry 的 rect 表达在它绑定的槽的本地帧里（ABI 原文「槽本地」）。由此两条运行期规则：① **包含剪枝只在 quad 与条目同槽时进行**——跨帧比较两个矩形是拿两个坐标系比大小，而且槽一动结论就废；同帧限制让剪枝结论对槽的移动天然免疫，机制 3 的「槽动 → 重推绑定该槽的 ClipEntry」因此退化为把条目推进脏账（真实后端若预乘 rect 才需要重算），而不是每次滚动重算一遍窗口。② **折叠（子域 ∩ 外层）同样要求同帧**：跨帧折叠需要两槽的相对变换，那是 Extract（M1-13）持有 world 列时才有的信息，所以 `ClipBook` 对跨帧折叠是断言 + 计数，rect 原样保留——不假装能算。
+>
+> **`LeafRange.slack` 是写区间上界，不是额外余量（M1-11 实现期补充）。** 不变量 4 写「写区间 ⊆ `[start, start+slack)`」，于是 slack 的语义被钉死为**预留实例数**（`count ≤ slack`），不是「count 之外还有 slack 个」。预留区里的实例是真实存在的空实例（size 0、color 0、route 0），不是一段被跳过的洞——它们照常进上传区间、照常过 mock 的保留位写零检查，于是「叶变短」与「叶变长」在字节层面是同一条路径。只有请求了 slack 的叶（文本）才向上取 2 的幂，其余叶 `slack == count` 严丝合缝。
 
 ---
 
