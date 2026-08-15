@@ -33,6 +33,7 @@ public enum Ch : ushort
     Structure = 1 << 4,  // 增删子/换序/mask/孤岛准入变化
     Layout = 1 << 5,     // width,height,约束输入,autoSize
     Text = 1 << 6,       // 文本串/样式（排版产物再 Mark Content——三级惰性）
+    BoundsD = 1 << 7,    // 派生位：子几何变化置父链、遇脏即停，query-pull 消费，**不入队列**
     DownColor = 1 << 8,  // 向下通道：子树戳惰性下钻
     DownVisible = 1 << 9,
     DownLayer = 1 << 10,

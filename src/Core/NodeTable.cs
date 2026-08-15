@@ -394,6 +394,38 @@ public sealed partial class NodeTable
     /// <summary>写向下通道子树戳（P6 只下钻 stamp==frameId 的子树）。</summary>
     internal void SetSubtreeStamp(uint index, uint frameId) => _subtreeStamp[index] = frameId;
 
+    // ── 下标级拓扑读（失效平面的父链置位 / 子树下钻按下标走，句柄化每步都做太贵）──
+    // 架构文档「平面二 ↔ 节点核心」接缝：本平面依赖 NodeTable.Parent/IsAlive 做父链置位与代际校验。
+    // 这些是同一批读的 O(1) 下标版，**只读**：树的写口仍然只有 authored/结构那几个。
+
+    /// <summary>父下标（无父 = <see cref="NoIndex"/>）。</summary>
+    internal uint ParentIndex(uint index) => _parent[index];
+
+    /// <summary>首子下标（无子 = <see cref="NoIndex"/>）。</summary>
+    internal uint FirstChildIndex(uint index) => _firstChild[index];
+
+    /// <summary>末子下标（无子 = <see cref="NoIndex"/>）。环形兄弟链使之为 O(1)。</summary>
+    internal uint LastChildIndex(uint index)
+    {
+        uint first = _firstChild[index];
+        return first == NoIndex ? NoIndex : _prevSib[first];
+    }
+
+    /// <summary>前一个兄弟下标；已是首子（或无父）= <see cref="NoIndex"/>（环形表示不外泄）。</summary>
+    internal uint PrevSiblingIndex(uint index)
+    {
+        uint p = _parent[index];
+        if (p == NoIndex || _firstChild[p] == index) return NoIndex;
+        return _prevSib[index];
+    }
+
+    /// <summary>局部可见位（下行通道「隐藏子树免下钻」的判据；读的是 localVisual 而非级联值）。</summary>
+    internal bool IsIndexVisible(uint index) => (_localVisual[index] & Visual.Visible) != 0;
+
+    /// <summary>下标是否指向活槽（下标路径的 DEAD 校验；句柄路径仍走 <see cref="TryResolve"/>）。</summary>
+    internal bool IsIndexAlive(uint index) =>
+        index != NoIndex && index < (uint)_capacity && (_slot[index] & SlotFlags.Dead) == 0;
+
     private void Mark(uint index, Ch channel, WriteSource source) =>
         InvalidationHook?.Invoke(this, index, channel, source);
 }
