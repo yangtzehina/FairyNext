@@ -113,8 +113,12 @@ public readonly struct NodePropInfo
 [NodeProp("Color", Ch.Color, NodePropStore.Unbacked,
     Pending = "tint 基色列随渲染平面 CPU 镜像 baseColor 落位（M1-11）")]
 // touchable 归 Ch.Color 而非独立通道：它与 α/grayed 同住 localVisual，worldVisual 级联一并算。
-// **不带 DownColor 是 M1-06 的既有形态**——本包只做等价替换，改级联语义要先改失效协议（见交付简报）。
-[NodeProp("Touchable", Ch.Color, NodePropStore.VisualBit, Column = "_localVisual", Bit = "Touchable")]
+// **必须带 Down**：touchable 在 Visual.Cascade 里是 AND 级联，父置 false 必须让整棵子树的
+// worldVisual 重算，否则子节点仍自认为可点——命中测试会命中本该不可点的节点。这与 Alpha/
+// Grayed/Visible 同构，是「参与级联 ⇒ 必带下行通道」的必然推论，不是可选优化。
+// （M1-06 起既有形态漏此位，M1-09 标记待裁，此处裁定补齐；行为由级联下行门逐属性钉住。）
+[NodeProp("Touchable", Ch.Color, NodePropStore.VisualBit, Column = "_localVisual", Bit = "Touchable",
+    Down = Ch.DownColor)]
 [NodeProp("TextId", Ch.Text, NodePropStore.Unbacked,
     Pending = "文本内容列随 TextCore 无状态排版落位（M1-18）")]
 [NodeProp("FontSize", Ch.Text, NodePropStore.Unbacked,

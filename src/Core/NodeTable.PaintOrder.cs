@@ -96,6 +96,11 @@ public sealed partial class NodeTable
     {
         UiAssert.That(Phase == FramePhase.P6_Settle,
             "world/worldVisual 仅 P6 可写（不变量 6）");
+        // 序未定形就算派生 = 沿一条陈旧（或空）的 paintOrder 算：循环次数不对，结果**静默错**
+        // 而不是崩溃——比崩溃难查得多。相位机的 P6 是「先 ApplyStructure 再 DrainDerived」，
+        // 任何绕过内核直调本方法的路径（测试、工具、神谕）必须自己先定形。
+        UiAssert.That(_paintEpoch == _structEpoch,
+            "DrainDerivedFull 于未定形的 paintOrder（先调 ApplyStructure：结构变更后序必须先收敛）");
         DrainDerivedCore();
     }
 

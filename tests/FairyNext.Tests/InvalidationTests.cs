@@ -111,6 +111,54 @@ public static partial class Program
         AlphaMarksUpAndDownInOneCall();
         MarkInRenderDrainAssertsButKeepsWrite();
         MarkSiteRingRecordsCallSite();
+        CascadingPropsAllCarryDownChannel();
+        TouchableCascadesToSubtree();
+    }
+
+    // ── 级联下行门：参与 Visual.Cascade 的局部属性必须带下行通道 ──────────────
+    //
+    // 缺一个下行位的表现不是崩溃而是**静默错判**：父置 touchable=false，子树 worldVisual
+    // 不重算 → 子节点自认可点 → 命中测试命中本该不可点的节点。这与旧 fork 靠
+    // `_NotifyDescendantStreams` 补丁救场的第五通道病同构，故按属性逐条钉死，
+    // 而不是只测当前这一个漏网属性。
+
+    private static void CascadingPropsAllCarryDownChannel()
+    {
+        // Visual.Cascade 逐位读的四个分量：α（积）、visible（AND）、touchable（AND）、grayed（OR）。
+        // 凡被父值影响的分量，其 setter 必须给下行通道——否则子树 worldVisual 永远收不到重算。
+        string[] cascading = { "Alpha", "Visible", "Touchable", "Grayed" };
+        var missing = new List<string>();
+        foreach (string name in cascading)
+        {
+            NodePropInfo p = Array.Find(NodeProps.All, x => x.Name == name);
+            if (p.Name == null || (p.Marks & ChMask.Down) == Ch.None) missing.Add(name);
+        }
+        Check($"级联下行门：参与 Visual.Cascade 的属性全部带下行通道（缺：{(missing.Count == 0 ? "无" : string.Join(",", missing))}）",
+            missing.Count == 0);
+    }
+
+    private static void TouchableCascadesToSubtree()
+    {
+        var t = ForkTree(out var a, out var ac, out _, out _);
+        var inv = new Invalidation(t);
+        t.Phase = FramePhase.P6_Settle;
+        t.ApplyStructure();                         // 序先定形，否则派生沿空 paintOrder 静默算 0 个节点
+        t.DrainDerivedFull();                       // 收敛初值：整树 touchable = true
+        bool before = (t.WorldVisual(ac[0]) & Visual.Touchable) != 0;
+
+        t.Phase = FramePhase.P3_Commands;
+        inv.BeginFrame(2);
+        t.SetTouchable(a, false);                   // 父置不可点
+
+        t.Phase = FramePhase.P6_Settle;
+        var reached = new List<uint>();
+        inv.DrainDown((idx, bits) => reached.Add(idx));
+        t.ApplyStructure();
+        t.DrainDerivedFull();
+        bool after = (t.WorldVisual(ac[0]) & Visual.Touchable) != 0;
+
+        Check("级联下行门：父置 touchable=false 时子树被下钻并重算——子节点不再自认可点",
+            before && !after && reached.Contains(a.Index) && reached.Contains(ac[0].Index));
     }
 
     // ── 不变量 2：Mark 幂等 O(1) ────────────────────────────────────────────
