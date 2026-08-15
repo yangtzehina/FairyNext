@@ -92,10 +92,35 @@ public sealed partial class NodeTable
     public NodeHandle Root { get; }
 
     /// <summary>
-    /// 当前法定相位。**M1-08 相位机接管后由 UiKernel 唯一驱动**；在此之前默认 P3（用户代码自由写状态）。
-    /// 所有相位门（不变量 2/3/6）读本值。
+    /// 当前法定相位。**接了内核的树域由 <see cref="UiKernel"/> 独占驱动**（M1-08）；
+    /// 未接内核的树（单测/离线工具）沿用手写 setter，默认 P3（帧外 = 用户代码自由写状态的窗口）。
+    /// 所有相位门（不变量 2/3/6/9）读本值。
     /// </summary>
-    public FramePhase Phase { get; internal set; } = FramePhase.P3_Commands;
+    public FramePhase Phase
+    {
+        get => _phase;
+        internal set
+        {
+            // 两个驱动者 = 写门可被绕过（把相位调回 P3 就能在 P7 里随便写），因此接了内核就不许旁路设相位。
+            UiAssert.That(PhaseDriver == null,
+                "本树域已接 UiKernel：相位只能由内核驱动（旁路设相位会绕过 P7/P8 写门）");
+            // 断言之外**真拒绝**：release 下断言整体消失，若还照写，写门就成了纸面规则。
+            if (PhaseDriver != null) return;
+            _phase = value;
+        }
+    }
+
+    private FramePhase _phase = FramePhase.P3_Commands;
+
+    /// <summary>相位独占驱动者（<see cref="UiKernel"/> 构造时登记；null = 无内核）。</summary>
+    internal object? PhaseDriver { get; set; }
+
+    /// <summary>驱动者专用的相位写口（校验调用方就是登记过的驱动者）。</summary>
+    internal void SetPhase(FramePhase phase, object driver)
+    {
+        UiAssert.That(ReferenceEquals(driver, PhaseDriver), "非驱动者改相位");
+        _phase = phase;
+    }
 
     /// <summary>
     /// 结构世代（机制⑤）：任何改变链式拓扑的编辑 +1。

@@ -9,6 +9,10 @@
     <!-- M1-02 预留的接线（M1-06 接上）：局部/世界变换用 Numerics 的 Affine2D，
          等值切断用 BitEquals——树内不得出现第二份数学实现。 -->
     <ProjectReference Include="../Numerics/FairyNext.Numerics.csproj" />
+    <!-- M1-08 接线：P3 的命令泵复用 State 的 CommandQueue<T>（M1-03 fork 直搬件），
+         输入队列同款。方向是 Core → State 且**只能**是这个方向：State 必须保持叶子工程
+         （零 ProjectReference），反向引用会与 P4 的 Binder/Resolve 接线成环。 -->
+    <ProjectReference Include="../State/FairyNext.State.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- 门要能被单测断言「确实响了」，失效钩子要能被单测装：内部面对测试工程开放。 -->

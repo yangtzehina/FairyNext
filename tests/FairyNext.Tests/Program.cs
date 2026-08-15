@@ -23,6 +23,7 @@ public static partial class Program
         OracleGoldenSuite(); // M1-04 oracle golden 管线（无 Unity 依赖），用例在 OracleGoldenTests.cs（partial）
         NodeTableSuite();   // M1-06 数据宪法不变量，用例在 NodeTableTests.cs（partial）
         InvalidationSuite(); // M1-07 失效协议（时间宪法不变量），用例在 InvalidationTests.cs（partial）
+        UiKernelSuite();     // M1-08 相位机 + Clock（时间宪法不变量 9/10/11/14），用例在 UiKernelTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

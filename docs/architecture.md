@@ -357,7 +357,13 @@ tween 与时间轴的推进**不在本平面**——它们归状态层，在 P4 
 
 **10. 重入契约（逐相位明文）。** P0–P3 自由改状态：没有任何排水在进行，Mark 是 O(1) 幂等的。P4：波次 + Binder 四件套收敛，上限内同帧、超限延帧可诊断；Resolve 不跑用户代码。P5：仅受控窗，副作用由快路径或 ≤3 轮兜底收束。P6 纯内部，禁。**P7/P8 禁改**：debug 构建 setter 检测 `CurrentPhase >= RenderDrain` 即断言；release 下 Mark 照记但入下帧队列——不丢、只延迟。P9 仅钩子。为什么：旧架构「onUpdate 里改属性碰巧能用」是未定义行为，能用与否取决于改动撞上遍历的哪一段；分相位明文 + 断言把它变成可测试契约，release 的降级路径保证违约代码也不丢失写入。
 
+> **「入下帧队列」的实现形态 = 排水水位冻结（M1-08 实现期补充）。** M1-07 曾指望队列双缓冲天然实现这条降级，落地后不成立：双缓冲只挡住**同一通道**排水期间的再 Mark，而 P7 要按 content→transform→color→visible→structure 顺序排五条通道——content 排水器写出的 transform 失效会在同帧后半段被消化，「P7 里改属性碰巧能用」这个旧世界的未定义行为原样复活。正确形态是**进 P7 时冻结每条通道的可排水位**（`Invalidation.FreezeForRenderDrain()`），水位以上的条目在排水时原样退回入队缓冲、脏位不清，P9 解冻后下一帧照排。于是「不丢、只延迟」对**用户违约写与排水器之间的连锁**同时成立；违例次数与被顺延条数进诊断面（`phaseViolations` / `deferredMarks`），不变量 9 从断言升级为可计量。
+
 **11. 三时域 Clock。** Scaled/Unscaled/Manual 三域：UI 默认 Unscaled（不吃 timeScale），逐定时器可改 Scaled（跟随游戏内物件的 UI），Manual 域由测试代码手动推进、支撑确定性回放。推进序 = 创建序，确定性；`TimerHandle` 代际句柄，gen 不符的 `Cancel` 静默 no-op——「跨帧缓存引用」从文档警告变类型防呆。为什么：旧 Timers 固定 unscaled 而 GTweener 默认 scaled 的双语义是长期陷阱源，时域必须一处声明；没有 Manual 域，回放测试就永远被宿主时钟污染。
+
+> **推进序细化为 `(deadline, 插入序)` 双键（M1-08 实现期补充）。** 「推进序 = 创建序」是单键，落地即不成立：**晚建的短定时器必须先响**（`After(0.1)` 在 `After(5)` 之后创建也要先到期），单键创建序会把它排在后面。正确形态是双键——先按到期时刻升序，**同一 deadline 才回到 After/Every 的调用先后**；不变量 14 的「推进序确定性」由第二键提供，第一键只是正确性。这条顺序是公开 API 承诺（写进 `Clock` 的 XML 注释、由单测钉住），不是实现细节。周期定时器的重排发生在**回调之前**（回调内 `Cancel` 自己必然生效），且一次推进最多触发一次——掉帧不补触发，否则一次卡顿会变成回调风暴。
+
+> **形态差异：门面是每树域实例，frameId 归内核（M1-08 实现期补充）。** 文档写 `static class UiKernel` / `static class Clock`；实现是**每树域一个 `UiKernel`**（同 M1-07 对 `Invalidation` 的处理）——树域是多份的（多 stage 各一棵树），静态全局态会把多棵树的相位、诊断、定时器混成一本账，也让 Manual 域无法并行回放。另外 `FrameTime` 不再携带 `frameId`：帧号由内核独占递增，交给宿主传等于把「单调递增」这条子树戳/回放带/诊断锁存共同的地基外包出去。`IChannelDrain.Drain` 的签名比文档多一个 `Ch channel` 参数——一个排水器可以消费多条通道（渲染流一家消费五条），回调里必须知道排的是哪条。相位与通道的对应关系落成：P5 排 Text（度量）与 Layout，P7 排 content/transform/color/visible/structure 五条；**没有注册消费者的通道不排水**，脏位与队列原样留到下一帧（P0 的输入队列同一条纪律：没装 `InputHandler` 就不排空，不丢包）。
 
 **12. 失效理由枚举与诊断锁存。** `Invalidation.Mark` 必携 `InvalidateReason`（用户写 / 绑定行 / gear / 时间轴 / 纯 tween / 布局派生 / 全局失效），诊断面按理由聚合（每次 Mark 成本 +1 字节）；debug 构建另记调用点入环形缓冲，P9 统一锁存。为什么：要能回答「这个 quad 本帧为何重写」——Chromium 的 DamageReason 与 SwiftUI 的 `_printChanges` 证明失效可解释性必须在协议里内建，事后加装无从谈起。
 

@@ -89,9 +89,10 @@ public interface IChannelDrain
     Ch Consumes { get; }
 
     /// <summary>排空一条通道的一批句柄。</summary>
+    /// <param name="ctx">本帧上下文（帧号/相位/时间；M1-08 相位机补上的参数）。</param>
     /// <param name="channel">被排空的单个通道位。</param>
     /// <param name="queue">本批句柄（入队序 = Mark 序，FIFO）。</param>
-    void Drain(Ch channel, ReadOnlySpan<NodeHandle> queue);
+    void Drain(ref FrameContext ctx, Ch channel, ReadOnlySpan<NodeHandle> queue);
 }
 
 /// <summary>
@@ -234,6 +235,10 @@ public sealed class InvalidationDiag
     public long GlobalRequests;
     /// <summary>全局失效实际生效次数（只可能发生在 P2）。</summary>
     public long GlobalApplied;
+    /// <summary>相位写门违例数（不变量 9）：<c>Phase &gt;= P7</c> 时发生的 Mark 次数。</summary>
+    public long PhaseViolations;
+    /// <summary>被写门顺延到下一帧的队列条目数（降级路径的收据：不丢、只延迟）。</summary>
+    public long DeferredEntries;
 
     /// <summary>某通道的 Mark 计数（传单个通道位）。</summary>
     public long MarksOf(Ch channel)
@@ -258,6 +263,7 @@ public sealed class InvalidationDiag
         BoundsSteps = BoundsStops = BoundsPulled = 0;
         DownVisits = HiddenSkips = StaleDropped = Drained = NoDrainerSkips = 0;
         GlobalRequests = GlobalApplied = 0;
+        PhaseViolations = DeferredEntries = 0;
     }
 
     /// <summary>拷贝一份（锁存用；不共享数组）。</summary>
@@ -271,6 +277,7 @@ public sealed class InvalidationDiag
         DownVisits = src.DownVisits; HiddenSkips = src.HiddenSkips;
         StaleDropped = src.StaleDropped; Drained = src.Drained; NoDrainerSkips = src.NoDrainerSkips;
         GlobalRequests = src.GlobalRequests; GlobalApplied = src.GlobalApplied;
+        PhaseViolations = src.PhaseViolations; DeferredEntries = src.DeferredEntries;
     }
 
     internal void Count(Ch channels, InvalidateReason reason)
@@ -335,8 +342,8 @@ public readonly struct MarkSite
 /// 与架构文档的两处形态差异（语义等价，接线时点不同）：
 ///  - 文档写 <c>static class Invalidation</c>；这里是**每树域一个实例**——树域是多份的（多 stage 各一棵树），
 ///    静态全局态会把跨树失效混成一本账，也让测试互相污染。M1-08 的 UiKernel 持有实例并按相位调度。
-///  - <see cref="IChannelDrain.Drain"/> 的 <c>ref FrameContext ctx</c> 参数等 M1-08 的相位机落地后再补
-///    （FrameContext 此刻尚不存在），本包按工作包约定的 <c>Drain(Ch, ReadOnlySpan&lt;NodeHandle&gt;)</c> 交付。
+///  - <see cref="IChannelDrain.Drain"/> 的 <c>ref FrameContext ctx</c> 参数**已由 M1-08 补上**；
+///    排水的调用时机同样归 <see cref="UiKernel"/>（P5 Text/Layout、P7 五通道），本类只管「谁排、排什么」。
 /// </summary>
 public sealed class Invalidation
 {
@@ -344,8 +351,10 @@ public sealed class Invalidation
     private readonly ChQueue[] _queue = new ChQueue[ChMask.UpCount];      // 入队缓冲
     private readonly ChQueue[] _batch = new ChQueue[ChMask.UpCount];      // 排水快照缓冲（与入队缓冲交换）
     private readonly IChannelDrain?[] _drains = new IChannelDrain?[ChMask.UpCount];
+    private readonly int[] _drainCap = new int[ChMask.UpCount];           // 冻结期的可排水位（-1 = 不限）
     private readonly InvalidationDiag _diag = new InvalidationDiag();
     private readonly InvalidationDiag _lastFrame = new InvalidationDiag();
+    private bool _frozen;
 
     private ulong _frameId;
     private uint _frameStamp = 1;
@@ -368,6 +377,7 @@ public sealed class Invalidation
         UiAssert.That(table.InvalidationHook == null,
             "一棵树只能接一个失效协议实例（Mark 是全组唯一入口，两本账 = 漏失效）");
         table.InvalidationHook = OnTableWrite;
+        for (int slot = 0; slot < ChMask.UpCount; slot++) _drainCap[slot] = -1;
     }
 
     /// <summary>卸下钩子（测试拆装/树域回收用）。</summary>
@@ -481,9 +491,12 @@ public sealed class Invalidation
         UiAssert.That(channels != Ch.None, "Mark 收到空通道集（通道归属封闭：没有归属的属性不该有 setter）");
         UiAssert.That((channels & ~ChMask.All) == 0, "Mark 收到未定义的通道位");
         // 不变量 9：P7/P8 禁改。断言之外照常入队——降级路径必须在断言之外，
-        // 而「入下帧队列」由双缓冲天然实现：本帧的排水读的是已交换出去的快照。
-        UiAssert.That(_table.Phase < FramePhase.P7_RenderDrain,
+        // 「不丢、只延迟」由 M1-08 的排水水位冻结（<see cref="FreezeForRenderDrain"/>）保证：
+        // 位照置、队照入，只是本帧不再排到它们。
+        bool violation = _table.Phase >= FramePhase.P7_RenderDrain;
+        UiAssert.That(!violation,
             "相位门：P7/P8 的 Mark 是违约写（不变量 9）——记录照做，但只能在下一帧排水");
+        if (violation) _diag.PhaseViolations++;
 
         _diag.Count(channels, reason);
 
@@ -636,17 +649,53 @@ public sealed class Invalidation
     }
 
     /// <summary>
+    /// 冻结排水水位（**P7 入口由相位机调**，不变量 9 的 release 降级路径）。
+    /// 冻结后每条通道只准排「冻结瞬间已在队」的那些条目；P7/P8 期间新入队的失效
+    /// 位照置、队照入，但本帧不再排到它们，下一帧照常排——不丢、只延迟。
+    ///
+    /// 为什么不能靠双缓冲兜住：双缓冲只挡住**同一通道**排水期间的再 Mark。
+    /// P7 要按 content→transform→color→visible→structure 顺序排五条通道，
+    /// content 排水器写出的 transform 失效若不冻结，同帧后半段就被消化了——
+    /// 「P7 里改属性碰巧能用」这个旧世界的未定义行为会原样复活。
+    /// </summary>
+    public void FreezeForRenderDrain()
+    {
+        for (int slot = 0; slot < ChMask.UpCount; slot++) _drainCap[slot] = _queue[slot].Count;
+        _frozen = true;
+    }
+
+    /// <summary>解冻（P9 由相位机调；下一帧照常全量排水）。</summary>
+    public void Unfreeze()
+    {
+        _frozen = false;
+        for (int slot = 0; slot < ChMask.UpCount; slot++) _drainCap[slot] = -1;
+    }
+
+    /// <summary>当前是否处于冻结窗口（P7 起、P9 止）。</summary>
+    public bool IsFrozen => _frozen;
+
+    /// <summary>
+    /// 排空一条上行通道（无内核路径：合成一个 detached 上下文）。
+    /// 相位机走 <see cref="DrainChannel(ref FrameContext, Ch)"/>——ctx 从帧上下文来，不是这里现造的。
+    /// </summary>
+    public int DrainChannel(Ch channel)
+    {
+        FrameContext ctx = FrameContext.Detached(this);
+        return DrainChannel(ref ctx, channel);
+    }
+
+    /// <summary>
     /// 排空一条上行通道，返回交付给排水器的条数。
     ///
-    /// 时序（三步不可换序）：
-    ///  ① **交换**入队缓冲与快照缓冲——排水期间新产生的 Mark 落在入队缓冲，既不会写穿正在被读的
-    ///     快照，也天然实现不变量 9 的降级语义（P7 里的 Mark 顺延到下一帧排水）；
-    ///  ② **消费即清位**——清位在回调之前，所以排水器在回调里对同节点的再 Mark 会重新入队；
-    ///  ③ 丢弃陈旧句柄（入队后节点死了）后再交付连续 span。
+    /// 时序（四步不可换序）：
+    ///  ① **交换**入队缓冲与快照缓冲——排水期间新产生的 Mark 落在入队缓冲，不会写穿正在被读的快照；
+    ///  ② 冻结窗口内**切掉水位以上的尾巴**并原样退回入队缓冲（脏位不清 ⇒ 下一帧照排，不变量 9）；
+    ///  ③ **消费即清位**——清位在回调之前，所以排水器在回调里对同节点的再 Mark 会重新入队；
+    ///  ④ 丢弃陈旧句柄（入队后节点死了）后再交付连续 span。
     ///
     /// 通道**没有注册排水器时不排水**：脏位与队列原样留到下一次（跨帧存活靠脏位，队列因去重不会膨胀）。
     /// </summary>
-    public int DrainChannel(Ch channel)
+    public int DrainChannel(ref FrameContext ctx, Ch channel)
     {
         int slot = ChMask.UpSlot(channel);
         UiAssert.That(slot >= 0, "DrainChannel 只接受单个上行通道位");
@@ -657,14 +706,26 @@ public sealed class Invalidation
         if (drainer == null) { _diag.NoDrainerSkips++; return 0; }
         if (_queue[slot].Count == 0) return 0;
 
+        int cap = _frozen ? _drainCap[slot] : -1;
+        if (cap == 0) { _diag.DeferredEntries += _queue[slot].Count; return 0; }
+
         ChQueue tmp = _queue[slot];
         _queue[slot] = _batch[slot];
         _batch[slot] = tmp;
 
         Span<NodeHandle> buf = _batch[slot].Contiguous();
+        int take = buf.Length;
+        if (cap >= 0 && cap < take)
+        {
+            take = cap;
+            for (int k = take; k < buf.Length; k++) _queue[slot].Enqueue(buf[k]);   // 退回：位仍脏，下一帧排
+            _diag.DeferredEntries += buf.Length - take;
+        }
+        if (_frozen) _drainCap[slot] = 0;      // 冻结窗口内一条通道只放行一次水位内的量
+
         uint bit = 1u << slot;
         int n = 0;
-        for (int k = 0; k < buf.Length; k++)
+        for (int k = 0; k < take; k++)
         {
             if (!_table.TryResolve(buf[k], out uint idx)) { _diag.StaleDropped++; continue; }
             _table.ClearDirty(idx, bit);
@@ -675,7 +736,7 @@ public sealed class Invalidation
         if (n > 0)
         {
             _drainingSlot = slot;
-            try { drainer.Drain(channel, buf.Slice(0, n)); }
+            try { drainer.Drain(ref ctx, channel, buf.Slice(0, n)); }
             finally { _drainingSlot = -1; }
         }
         _batch[slot].Clear();
@@ -684,17 +745,26 @@ public sealed class Invalidation
     }
 
     /// <summary>
-    /// 按位序批量排空多条上行通道，返回总条数。
-    /// 位序只是便利；**通道与相位的对应关系是相位表说了算**（Layout 在 P5、Structure 在 P6、
-    /// 五通道在 P7），调用方按相位表逐条调 <see cref="DrainChannel"/> 才是正规走法。
+    /// 按位序批量排空多条上行通道（无内核路径；ctx 版见 <see cref="DrainChannels(ref FrameContext, Ch)"/>）。
     /// </summary>
     public int DrainChannels(Ch channels)
+    {
+        FrameContext ctx = FrameContext.Detached(this);
+        return DrainChannels(ref ctx, channels);
+    }
+
+    /// <summary>
+    /// 按位序批量排空多条上行通道，返回总条数。
+    /// 位序只是便利；**通道与相位的对应关系是相位表说了算**（Text/Layout 在 P5、五通道在 P7），
+    /// 调用方按相位表逐条调 <see cref="DrainChannel(ref FrameContext, Ch)"/> 才是正规走法。
+    /// </summary>
+    public int DrainChannels(ref FrameContext ctx, Ch channels)
     {
         int total = 0;
         for (int slot = 0; slot < ChMask.UpCount; slot++)
         {
             Ch c = ChMask.UpChannelAt(slot);
-            if ((channels & c) != 0) total += DrainChannel(c);
+            if ((channels & c) != 0) total += DrainChannel(ref ctx, c);
         }
         return total;
     }

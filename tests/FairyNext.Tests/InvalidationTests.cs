@@ -22,15 +22,20 @@ public static partial class Program
         public Ch Consumes { get; }
         public readonly List<NodeHandle> Seen = new List<NodeHandle>();
         public readonly List<Ch> Channels = new List<Ch>();
+        public readonly List<ulong> Frames = new List<ulong>();
+        public readonly List<FramePhase> Phases = new List<FramePhase>();
         public int Calls;
 
         /// <summary>在排水回调内执行（测「排水期间再 Mark 落下一批」）。</summary>
         public Action? Reentrant;
 
-        public void Drain(Ch channel, ReadOnlySpan<NodeHandle> queue)
+        /// <summary>M1-08 起签名带 <c>ref FrameContext</c>（相位机落地后补上的接缝）。</summary>
+        public void Drain(ref FrameContext ctx, Ch channel, ReadOnlySpan<NodeHandle> queue)
         {
             Calls++;
             Channels.Add(channel);
+            Frames.Add(ctx.FrameId);
+            Phases.Add(ctx.Phase);
             for (int i = 0; i < queue.Length; i++) Seen.Add(queue[i]);
             Reentrant?.Invoke();
         }
