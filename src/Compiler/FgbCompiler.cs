@@ -5,11 +5,15 @@ namespace FairyNext.Compiler;
 /// 宪法约束：编译 = 对着无头运行时跑一遍再冻结产物——不存在第二套布局/排序实现（承诺 8）。
 /// .fui 前端（两级块表 ByteBuffer 读取器）只活在本工程；发布版运行时不含 .fui 解析。
 /// 每次编译打印内存计划（blob 字节 / 实例块字节 / 池预算 / 掩码占用率——v1.2）。
+///
+/// 前端已就位（M1-12，见 <c>Fui/</c>）：<see cref="Fui.FuiPackage.TryParse"/> 出包描述符，
+/// <see cref="Fui.FuiComponent.TryParse"/> 出显示列表数据模型（本期不解释的部分留 span）。
+/// 缺的是消费者：M1-19 的 FGB 段写入器与 M1-20 的「建树 → 跑 P5 + 度量 → Extract → 冻结」。
 /// </summary>
 public static class FgbCompiler
 {
     public static CompileResult Compile(ReadOnlyMemory<byte> fuiBytes, in CompileOptions options)
-        => throw new NotImplementedException("M1: .fui 前端移植（ByteBuffer 块表读取器）+ NODE/PLAN/QUAD 段产出");
+        => throw new NotImplementedException("M1-19/M1-20：FGB 段写入器 + 建树/布局/Extract/冻结（.fui 前端见 Fui/）");
 }
 
 public readonly struct CompileOptions

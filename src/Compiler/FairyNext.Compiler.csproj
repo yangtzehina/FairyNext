@@ -7,5 +7,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Core/FairyNext.Core.csproj" />
+    <!-- .fui 前端（M1-12）：ByteBuffer.ReadColor 出 Numerics 的 Color32，包身份 sourceHash 走 FnvHash。
+         经 Core 传递也拿得到，写明是因为前端**直接**依赖它，不该靠别人的引用面活着。 -->
+    <ProjectReference Include="../Numerics/FairyNext.Numerics.csproj" />
   </ItemGroup>
 </Project>

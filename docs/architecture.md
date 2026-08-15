@@ -1195,6 +1195,16 @@ CompileResult FgbCompiler.Compile(byte[] fuiBytes, CompileOptions o); // scaleLe
 17. 同一 .fui 的离线编译产物与进程内 JIT 产物**逐字节相等**——「编译器 = 无头运行时」的机器可验形式。
 18. 编译期 QUAD/SEGS/LEAF/CLIP 与无头运行时对同树的 Extract 输出**逐字节相等**——这同时是降级阶梯「慢但正确」的正确性凭据：降级路径与烘焙路径是同一段代码。
 
+> **.fui 前端的失败面是二值的，且窗口边界检查前移到读口（M1-12 实现期补充）。** 机制 12 的 fuzz 纪律写的是「装载验证器与 arm 验证器」，也就是 FGB 侧；但 .fui 侧同样吃外部字节，且它在**编译期**——那里崩掉只是构建失败，不至于上真机。真正的问题在别处：fork 的 `ByteBuffer` 除 `ReadBytes` 外不校验窗口长度，只在越过**整个** `byte[]` 时才抛，于是一个偏移被改坏的包会静默读到窗口之外的字节并当成合法字段。落地形态是三件：① 每个读口先过 `Require(n)`，越窗抛 `FuiFormatException`；② 对外只有 `FuiPackage.TryParse` / `FuiComponent.TryParse` 两个入口，任意字节序列的可接受结果只有「成功」与「false + 诊断串」——异常不越过这层括号，那条诊断串就是 LoadReport 在 .fui 侧的对应物；③ 计数字段（字符串表、item、sprite、孩子、gear）过「每条记录最小字节数 × 计数 ≤ 剩余窗口」的门，否则一个被改成 20 亿的计数会先 OOM 再失败——OOM 不是「拒收 + 诊断」。
+>
+> **两级块表 Seek 的三种「无此块」出口合并（M1-12 实现期补充）。** `Seek(indexTablePos, blockIndex)` 的算法原样保留（它是 .fui 前向兼容的核心：新版编辑器追加块，旧读取器读不到就走默认值，不会错位），只把**越窗**并入既有的缺块出口——块表位置越窗、块下标 ≥ 段数、跳转目标越窗，一律 `return false` 且**不移动 position**，与 fork 里 `newPos <= 0` 的缺块信号同一个出口。于是调用方的形态不变（`if (Seek(...))` 就是「有没有这块」），而「块表被改坏」不再表现为 position 落到窗口外、之后每次读都读别人的字节。
+>
+> **孩子记录各自成窗，fork 的三遍 Setup 收成一遍（M1-12 实现期补充）。** fork 的 `ConstructFromResourceCore` 走三遍孩子列表（块 0 基本属性 → 块 3 关系 → 块 1/2 tooltips 与 gear），因为它要在孩子对象已存在之后才能解析关系目标；编译期没有对象，三遍读的是同一批字节，故收成一遍。顺带把每个孩子记录切进**自己的窗口**（`[curPos, curPos + dataLen)`）：孩子的块表偏移因此够不到兄弟的字节——fork 那边块表偏移越界会读进相邻记录，且没有任何东西会报警。这条被写成结构不变量（孩子 / gear / transition 的 span 必须落在各自记录内），进主 runner。
+>
+> **前端只解释「寻址与几何」，其余留 span（M1-12 实现期补充）。** 机制 1 说编译 = 对着无头运行时跑一遍再冻结；推论是**前端不该产出第二份中间对象图**。落地口径：本期解释的只有定位与寻址所需的字段（条目类型/id/名字/尺寸/图集矩形、显示列表的类型/资源引用/基本属性/控制器页表/关系边），gear、transition、各控件类型专属块（`GList`/`GTextField`/`GLoader` 的块 5+）、组件扩展块 6 一律以 `(offset, length)` 交出，M1-20 用同一个 `ByteBuffer` 就地重放。凡两处实现同一语义必然漂移——中间对象图正是那个「第二处」。
+>
+> **移植件相对 fork 的三处缺陷修正（M1-12 实现期补充）。** `ByteBuffer` 的移植改了三处 fork 缺陷而非风格：① `ReadBuffer` 切子缓冲时写的是 `new ByteBuffer(_data, _pointer, count)`，漏加 `_offset`——只有宿主窗口 offset == 0 时才对（fork 的 `UIPackage` 恰好总是 0，所以一直没暴露）；② `ReadDouble` 的字节交换分支误写 `BitConverter.ToSingle`，该分支在小端机读大端 .fui 时必走，只是 .fui 里没有 double 字段；③ `static byte[] temp` 是并行编包下的数据竞争，而大端 .fui 在小端机上**每个 float 都要走这块暂存**——改实例字段，并由「本类零静态可变状态」的反射断言钉住。另有两处按 Unity 依赖改写：`ReadColor` 出 `Numerics.Color32`（fork 那行还顺手隐式转成浮点 `Color`，纯损失），`ReadPath` 去 `GPathPoint` 依赖后抛 `NotSupportedException`，随 M2 tween 引擎回归。
+
 ---
 
 ## 平面六 · 验证平面（Verification Plane）——正确性如何被机器守住

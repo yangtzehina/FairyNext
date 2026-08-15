@@ -30,6 +30,9 @@ public static partial class Program
                              // 用例在 MockBackendTests.cs（partial）——L2 行为门与 L3 回放门的宿主
         RenderStreamSuite(); // M1-11 RenderStream 核心（CPU 镜像 SoA / 段键 / SlotTable / ClipBook /
                              // 颜色 tier / 提交路径），用例在 RenderStreamTests.cs（partial）
+        FuiReaderSuite();    // M1-12 .fui 前端读取器（ByteBuffer 移植 + 包/组件/显示列表解析）：
+                             // 对 tests/fixtures/fui 的真实样例包做字段级对照（对照物 = 编辑器授权 XML），
+                             // 用例在 FuiReaderTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;
