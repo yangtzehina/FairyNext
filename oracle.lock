@@ -2,7 +2,14 @@
   "comment": "参考实现（oracle）钉死。像素对照门/布局全组合矩阵/首分歧帧全部对拍此仓库此提交。只读：修 oracle bug 才允许动它，动了必须 bump 此处 SHA 并重跑全部 golden。",
   "repo": "https://github.com/yangtzehina/FairyGUI-unity",
   "localPath": "~/ECS/FairyGUI-unity",
-  "sha": "d1a9d7d",
+  "sha": "08a2d56",
   "unityVersion": "2022.3.62f3",
-  "driver": "UniCli (~/bin/unicli, UNICLI_PROJECT=~/ECS/FairyGUI-unity)"
+  "driver": "UniCli (~/bin/unicli, UNICLI_PROJECT=~/ECS/FairyGUI-unity)",
+  "shaHistory": [
+    { "sha": "d1a9d7d", "until": "2026-08-15", "note": "工程状态未提交（ProjectVersion 停在 2022.3.17f1c1 等 4 处脏改），基线实际生成于 d1a9d7d + 未记录的工作树修改" },
+    { "sha": "08a2d56", "since": "2026-08-15", "note": "工程状态入库：Unity 2022.3.62f3、packages.unity.com、编辑器升级字段、test-framework。基线像素内容未变（提交操作不改文件内容），故 goldens 无需重生成，仅 meta.oracleSha 同步" }
+  ],
+  "knownLocalOnly": {
+    "Packages/manifest.json": "com.yucchiy.unicli-server 指向本机绝对路径 file:/Users/ai/ECS/UniCli/...，为 UniCli 驱动接入；属机器本地配置，故意不入库（提交会破坏他机 checkout）。oracle 工作树因此常驻这一行差异，不影响渲染与布局输出。"
+  }
 }

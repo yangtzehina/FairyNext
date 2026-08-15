@@ -1267,7 +1267,7 @@ abi   QuadInstance 80B  rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 e
 
 **mock 参考光栅三规则。** 整数色彩运算、整数边函数、f32 仅用于线性插值。浮点光栅在不同 CPU/JIT 上不保证逐位一致；三规则换来的跨平台 bit-identical 是金样与 Trace 能入 CI 的前提。
 
-**Oracle：旧 fork 钉 SHA。** 旧 fork 保持为可运行参考实现，**钉死在 `~/ECS/FairyGUI-unity @ d1a9d7d`**——布局组合矩阵与渲染像素基线全部由它生成，不钉 SHA 则基线随 fork 演进漂移，「与谁一致」失去定义。像素门的定位：塔尖、全矩阵在 M2 收口时启用、只判「与 oracle 在其正确子集上一致」；已知的旧实现错误（如组透明度对重叠兄弟的 α 积）在基线中标注为豁免项而非追认为规范。**字形库换代帧单列基线行**——全局失效晚一帧生效是帧协议契约，不得被像素门误报为回归。
+**Oracle：旧 fork 钉 SHA。** 旧 fork 保持为可运行参考实现，**由 `oracle.lock` 钉死 SHA**（当前 `08a2d56`；每次 bump 记进其 shaHistory 并说明基线是否需重生成）——布局组合矩阵与渲染像素基线全部由它生成，不钉 SHA 则基线随 fork 演进漂移，「与谁一致」失去定义。像素门的定位：塔尖、全矩阵在 M2 收口时启用、只判「与 oracle 在其正确子集上一致」；已知的旧实现错误（如组透明度对重叠兄弟的 α 积）在基线中标注为豁免项而非追认为规范。**字形库换代帧单列基线行**——全局失效晚一帧生效是帧协议契约，不得被像素门误报为回归。
 
 **「谁失效了我」。** `Invalidation.Mark` 携带 reason（用户写/绑定行/gear 换页/时间轴/布局派生/全局失效/槽认领，**每次 Mark 多付 1 字节**），诊断面按理由聚合、P9 锁存；debug 构建另记调用点入环形缓冲。回答「这个 quad 本帧为何重写」——Chromium DamageReason 与 SwiftUI `_printChanges` 在各自体系里收敛出的同一调试体验。等值切断使这本账有信噪比：写同值不入账，真信号不被空转淹没。
 
@@ -1313,7 +1313,7 @@ abi   QuadInstance 80B  rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 e
 11. **[单测]** 编译产物 golden：BIND/CNST 拓扑序/掩码的 canonical 文本与入库版本相等；前提断言 FgbCompiler 同输入同字节。
 12. **[单测]** 等值切断比较语义：float 位等、NaN 视为相等、struct 由 codegen 生成 `==`——codegen 对每类型出等值单测；误切（该脏未脏）由不变量 1 捕获。
 13. **[规则+门]** mock 参考光栅三规则（整数色彩/整数边函数/f32 仅线性插值）；金样跨 CI runner 复现是入库门。
-14. **[门]** 像素门：与 oracle（`d1a9d7d`）基线比对；字形库换代帧单列基线行，晚一帧生效是契约不是回归；旧实现已知错误标豁免不追认。
+14. **[门]** 像素门：与 `oracle.lock` 所钉 oracle 提交的基线比对；字形库换代帧单列基线行，晚一帧生效是契约不是回归；旧实现已知错误标豁免不追认。
 15. **[门]** bench 报告缺 gitRev/backendVer/帧预算/样本数任一字段 → CI 拒收。
 16. **[结构性]** 输入带轨道为封闭枚举，派生数据无轨道可写；回放期重算的命中结果与录制时诊断一致（debug 断言）。
 17. **[硬基准门]** 1000 活跃 tween/帧 < 0.2ms（纯 tween 直写小道的存在性证明，随 bench 仪器化复跑）。
@@ -1339,5 +1339,5 @@ flowchart TB
 - 设计书（十条承诺/帧相位/仲裁表 + 9 子系统 + 分期/迁移/风险）：https://claude.ai/code/artifact/be8395f2-d127-4d27-b4af-cc833ce1363b
 - 业界对标评估（十系统、25 条修订处置）：https://claude.ai/code/artifact/ebc3937f-2a23-494e-9ef3-f1dcc2bc08af
 - Obsidian `FairyGUI重写/`（00–20：设计原稿、对抗评审 41 条、对标与 PocketJS 研究全文）
-- 参考实现（像素 oracle）：`oracle.lock` 钉 FairyGUI-unity fork @ d1a9d7d
+- 参考实现（像素 oracle）：`oracle.lock` 钉 FairyGUI-unity fork（当前 08a2d56）
 

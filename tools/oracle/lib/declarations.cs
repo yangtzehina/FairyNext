@@ -1,6 +1,6 @@
 // FairyNext oracle driver — 注入 `unicli eval --declarations` 的类型与执行体。
 // 运行上下文：Unity 编辑器进程（Play Mode）内的临时程序集，可访问 UnityEngine / UnityEditor / FairyGUI。
-// 只驱动 oracle（~/ECS/FairyGUI-unity @ d1a9d7d），不写 oracle 仓库内任何文件——产物全部落在 FairyNext 侧的 outDir。
+// 只驱动 oracle（~/ECS/FairyGUI-unity @ 08a2d56），不写 oracle 仓库内任何文件——产物全部落在 FairyNext 侧的 outDir。
 //
 // 三条确定性规则（否则 golden 会随编辑器窗口尺寸漂移）：
 //   1. stage 尺寸由 Stage.HandleScreenSizeChanged(W,H,0.02) 强制钉死，不读 Screen.width/height；

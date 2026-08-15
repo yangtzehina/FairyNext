@@ -1,6 +1,6 @@
 # oracle 对拍基建（M1-04）
 
-把钉死的 fork（`~/ECS/FairyGUI-unity @ d1a9d7d`）脚本化成**可编程 oracle**：建场景 → 截帧 → 导布局数值 → 基线入库 → 容差比对。
+把钉死的 fork（`~/ECS/FairyGUI-unity @ 08a2d56`）脚本化成**可编程 oracle**：建场景 → 截帧 → 导布局数值 → 基线入库 → 容差比对。
 架构里像素门（L4）与布局全组合矩阵的地基，也是风险 #1（布局像素兼容）的地基。
 
 分工是硬的：
@@ -25,7 +25,7 @@
 
 ```bash
 ./tools/oracle/capture.sh --check
-# oracle: oracle=/Users/ai/ECS/FairyGUI-unity @ d1a9d7d · Unity 2022.3.62f3 · unicli 1.6.0
+# oracle: oracle=/Users/ai/ECS/FairyGUI-unity @ 08a2d56 · Unity 2022.3.62f3 · unicli 1.6.0
 ```
 
 覆盖默认路径用环境变量：`ORACLE_DIR`、`UNICLI`、`ORACLE_TIMEOUT_MS`。

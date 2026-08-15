@@ -120,5 +120,5 @@ M3-01 热重载+编辑器连线（~1500；进程内 JIT、整面板重建不做�
 
 - 每包合入即跑 `dotnet build FairyNext.sln && dotnet run --project tests/FairyNext.Tests`（RESULT 判定行，fail>0 红）；该包对应门自此进强制集。
 - 里程碑收口：M1-26 / M2-15 / M3-08 各自的收口条件全绿才进入下期。
-- oracle 对拍：所有像素/数值 golden 出自 fork @ d1a9d7d（oracle.lock），UniCli 驱动；oracle 变更须 bump SHA + 重跑全部基线。
+- oracle 对拍：所有像素/数值 golden 出自 `oracle.lock` 所钉的 fork 提交（当前 08a2d56，演进见其 shaHistory），UniCli 驱动；oracle 变更须 bump SHA + 重跑全部基线。
 - 关键文件：`src/Contracts/Abi.cs`（ABI 根）、`src/Core/UiKernel.cs`（相位/失效落点）、`src/Compiler/FgbCompiler.cs`（关键路径汇合）、`src/Backend.Mock/`（行为门宿主）、`tests/FairyNext.Tests/Program.cs`（门载体）。
