@@ -40,6 +40,7 @@ public static partial class Program
         DownChannelCascadesAndLandsOnLeaves();
         HiddenSubtreeIsNotDrilled();
         StructureGateCatchesAStaleHiddenLeaf();
+        HiddenEditsLandAfterShow();
 
         // 面板根
         PanelRootLimitsRebuildToItsSubtree();
@@ -545,6 +546,37 @@ public static partial class Program
         bool red = !StreamStructureGate.Check(f.Table, f.Stream, out string err);
         Check($"门 · 流结构不变量（负例）: 漏标的隐藏容器 ⇒ 残叶被 authored 父链判据抓住 {err}",
             green && red && f.Stream.LeafCount == 1);
+    }
+
+    /// <summary>
+    /// M1-14b 端到端验收：隐藏容器 → 隐藏期间改子树内叶的 α → 重新显示。
+    /// 一条链踩三处接缝：隐藏免下钻（脏位在隐藏子树里过夜，14b-2 的时间宪法修复保证它不搁浅）、
+    /// 重新显示的 DownVisible 整支补钻、Extract 可见性父链传播（14b-1，隐藏期间叶不在流里）。
+    /// 最终字节必须是隐藏期间写入的那个 α，全程增量门与派生列神谕绿。
+    /// </summary>
+    private static void HiddenEditsLandAfterShow()
+    {
+        var f = new PipeFixture();
+        NodeHandle box = f.Box(0f, 0f, 50f, 50f);
+        NodeHandle inner = f.Box(0f, 0f, 20f, 20f, box);
+        NodeHandle x = f.Leaf(PipeSolid(0, 0xFF204080u), 0f, 0f, 10f, 10f, inner);
+        f.Tick();
+        bool baseOk = f.Stream.QuadCount == 1 && f.Stream.Quads[0].Color == 0xFF204080u;
+
+        f.Table.SetVisible(box, false);
+        IncrementalGateResult hide = f.TickAndCheck();
+        bool gone = f.Stream.LeafCount == 0 && f.Stream.QuadCount == 0;
+
+        f.Table.SetAlpha(x, 0.5f);                   // 隐藏期间写：级联值在隐藏子树里过夜
+        IncrementalGateResult during = f.TickAndCheck();
+
+        f.Table.SetVisible(box, true);               // 重新显示：DownVisible 整支补钻 + 整编回流
+        IncrementalGateResult show = f.TickAndCheck();
+
+        Check("端到端: 隐藏期间的 α 写在重新显示后落到字节（0x80204080），全程门绿",
+            baseOk && hide.Pass && gone && during.Pass && show.Pass
+            && f.Stream.LeafCount == 1 && f.Stream.Quads[0].Color == 0x80204080u
+            && Visual.Alpha(f.Table.WorldVisual(x)) == 128 && f.Sound());
     }
 
     // ── 面板根 ─────────────────────────────────────────────────────────────

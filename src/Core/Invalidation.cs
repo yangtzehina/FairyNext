@@ -373,6 +373,12 @@ public sealed class Invalidation
     private Ch[] _walkBits = new Ch[64];
     private int _walkTop;
 
+    // 走查期间（DrainDown 回调里）的下行置戳挂起集（M1-14b 修复 1）：
+    // 趟末代号推进（含回绕清列）之后统一按新代补戳。脏位照常即时置（见 StampDown）。
+    private bool _drainingDown;
+    private uint[] _pendingStamp = new uint[16];
+    private int _pendingCount;
+
     /// <summary>
     /// 接管一棵树的失效协议：装上 <see cref="NodeTable.InvalidationHook"/>，
     /// 此后树里每一次「等值切断通过」的写入都落到本实例。一棵树只能有一个实例。
@@ -383,6 +389,7 @@ public sealed class Invalidation
         UiAssert.That(table.InvalidationHook == null,
             "一棵树只能接一个失效协议实例（Mark 是全组唯一入口，两本账 = 漏失效）");
         table.InvalidationHook = OnTableWrite;
+        table.ReattachHook = OnReattach;
         for (int slot = 0; slot < ChMask.UpCount; slot++) _drainCap[slot] = -1;
     }
 
@@ -390,6 +397,7 @@ public sealed class Invalidation
     public void Detach()
     {
         if (_table.InvalidationHook == OnTableWrite) _table.InvalidationHook = null;
+        if (_table.ReattachHook == OnReattach) _table.ReattachHook = null;
     }
 
     /// <summary>被接管的树。</summary>
@@ -420,10 +428,21 @@ public sealed class Invalidation
     /// 帧首推进（相位机 M1-08 在 P1 之前调）。**不动下钻代**——代由 <see cref="DrainDown"/>
     /// 消费时推进（见 <see cref="FrameStamp"/>）：帧外写入与帧内写入必须落在同一代里，
     /// 否则帧外那批（用户代码最常见的窗口）永远等不到下钻。
-    /// 老戳自然过期，因而**不需要**遍历清戳。u32 回绕需 2^32 次下钻，
-    /// 回绕后最坏结果是一次多余的路由下钻（脏位没置 ⇒ 不会算错）。
+    /// 老戳自然过期，常规推进**不需要**遍历清戳；u32 回绕（每 2^32 次下钻一次）那一趟由
+    /// <see cref="DrainDown"/> 顺带整列清戳——不清的话陈年戳可能恰等于新代号，
+    /// 「本代已戳即停」会在归纳不成立的节点上骗停置戳，整条下行通道丢失（2026-08 审计）。
     /// </summary>
     public void BeginFrame(ulong frameId) => _frameId = frameId;
+
+    /// <summary>
+    /// 测试钩：直接设定下钻代号（**只供回绕测试**——把代号逼到 MaxValue 要 2^32 次真下钻）。
+    /// 0 是「未戳」哨兵，禁设。生产代码不得调用。
+    /// </summary>
+    internal void ForceStampEpochForTest(uint epoch)
+    {
+        UiAssert.That(epoch != 0, "下钻代号 0 是「未戳」哨兵，不可设为代号");
+        if (epoch != 0) _stampEpoch = epoch;
+    }
 
     /// <summary>P9 锁存：把本帧诊断拷进 <see cref="LastFrame"/> 并清零本帧计数。</summary>
     public void LatchFrame()
@@ -488,11 +507,33 @@ public sealed class Invalidation
     /// <c>_NotifyDescendantStreams</c> 补丁的结构化替代）。
     ///
     /// 常规隐显不需要调它：<c>SetVisible</c> 自己就 Mark 了 <c>Visible|DownVisible</c>，
-    /// 下钻在同帧 P6 就会看见。本方法给「可见性由结构变化间接翻转」的路径用
-    /// （典型：把子树挂到一棵可见的树上），由 Visible/Structure 排水调用。
+    /// 下钻在同帧 P6 就会看见。本方法给「级联语境由结构变化间接翻转」的路径用
+    /// （典型：把子树挂到一棵可见的树上）——真调用点是 <see cref="NodeTable.ReattachHook"/>
+    /// 经 <see cref="OnReattach"/>（M1-14b 修复 2）：重接已戳子树时补挂整棵子树的下行重算。
     /// </summary>
     public void RestampOnShow(NodeHandle node, InvalidateReason reason) =>
         Mark(node, ChMask.Down, reason);
+
+    /// <summary>
+    /// 重接钩子（<see cref="NodeTable.ReattachHook"/>：AddChildAt 把节点接到**新父**下时调）。
+    /// 已戳子树挂到未戳父下会打破下行路由的归纳基础「已戳 ⇒ 祖先全已戳」——下一趟从根
+    /// 判「本代无事」，整代下行脏位丢失（2026-08 审计实测：SetAlpha 后搬家，DownColor 永久滞留）。
+    ///
+    /// 只补新父链救不了摘链隔代的形状：摘链期间的下行写把戳停在摘链根为止，本代被消费作废后
+    /// 子树**内部**的戳停留在旧代，路由进不去。子树戳非零（= 子树里曾有过下行变化，可能有
+    /// 未消费的）即 <see cref="RestampOnShow"/> 整棵补挂，是两种形状共同的最小正确修法；
+    /// 戳为零（从未有过下行变化）零成本早退——建树期的海量 AddChild 走这条。
+    /// </summary>
+    private void OnReattach(uint index, WriteSource source)
+    {
+        if (_table.GetSubtreeStamp(index) == 0) return;
+        RestampOnShow(_table.HandleOf(index), ReasonOf(source));
+        // RestampOnShow 的置戳在 index 自己「本代已戳」时立即早停——那正是被重接打破的归纳，
+        // 新父链必须显式补戳。走查期间不补：挂起集趟末按新代整链补，彼时无陈戳可骗停。
+        if (_drainingDown) return;
+        uint parent = _table.ParentIndex(index);
+        if (parent != NodeTable.NoIndex) StampChain(parent);
+    }
 
     /// <summary>下标版 Mark（内部路径：调用方已解引用过，不再重复校验代际）。</summary>
     internal void MarkIndex(uint index, Ch channels, InvalidateReason reason) =>
@@ -540,19 +581,40 @@ public sealed class Invalidation
     }
 
     /// <summary>
-    /// 下行置戳：本节点置位 + 自身与**祖先链**全部盖上本帧戳。
+    /// 下行置戳：本节点置位 + 自身与**祖先链**全部盖上当前代的戳。
     /// 祖先补戳不是可选项——P6 从根按戳路由，不给祖先盖戳的子树根本走不到。
-    /// 「本帧已戳即停」的归纳基础：一个节点被盖戳时它的祖先必然同批被盖，故已戳 ⇒ 祖先全已戳。
+    /// 「本代已戳即停」的归纳基础：一个节点被盖戳时它的祖先必然同批被盖，故已戳 ⇒ 祖先全已戳。
+    ///
+    /// **走查期间（<see cref="DrainDown"/> 回调里）的置戳入挂起集、趟末补戳**（M1-14b 修复 1）：
+    /// 走查正在消费当前代，趟末就把这一代作废——此刻盖当前代的戳是「出生即过期」：
+    /// 目标分支若已出栈或被剪掉，下一趟从根第一步就判「本代无事」，脏位永久搁浅
+    /// （2026-08 审计实测 BUSY 场景）。脏位照常即时置（本趟还够得着的分支照常消费），
+    /// 挂起集在代号推进（含回绕清列）**之后**统一按新代补戳——走查期间的写与走查之后的写
+    /// 落在同一代里，都被下一次下钻收走。
     /// </summary>
     private void StampDown(uint index, Ch down)
     {
         _table.OrDirty(index, (uint)down);
+        if (_drainingDown) { PushPendingStamp(index); return; }
+        StampChain(index);
+    }
+
+    /// <summary>自身与祖先链盖当前代戳，「本代已戳即停」（<see cref="StampDown"/> 的置戳半边）。</summary>
+    private void StampChain(uint index)
+    {
         for (uint cur = index; cur != NodeTable.NoIndex; cur = _table.ParentIndex(cur))
         {
             if (_table.GetSubtreeStamp(cur) == _stampEpoch) { _diag.DownStampStops++; return; }
             _table.SetSubtreeStamp(cur, _stampEpoch);
             _diag.DownStamps++;
         }
+    }
+
+    private void PushPendingStamp(uint index)
+    {
+        if (_pendingCount == _pendingStamp.Length)
+            Array.Resize(ref _pendingStamp, _pendingStamp.Length * 2);
+        _pendingStamp[_pendingCount++] = index;
     }
 
     /// <summary>
@@ -819,35 +881,56 @@ public sealed class Invalidation
 
         int visited = 0;
         _walkTop = 0;
-        PushWalk(_table.Root.Index, Ch.None);
-        while (_walkTop > 0)
+        _drainingDown = true;                            // 走查窗口：期间的置戳入挂起集（修复 1）
+        try
         {
-            PopWalk(out uint idx, out Ch inherited);
-            if (!_table.IsIndexAlive(idx)) continue;
-
-            Ch own = (Ch)_table.GetDirty(idx) & ChMask.Down;
-            Ch bits = inherited | own;
-            bool stamped = _table.GetSubtreeStamp(idx) == _stampEpoch;
-            if (bits == Ch.None && !stamped) continue;      // 本分支本帧无事
-
-            if (own != Ch.None) _table.ClearDirty(idx, (uint)own);   // 消费即清
-            if (bits != Ch.None)
+            PushWalk(_table.Root.Index, Ch.None);
+            while (_walkTop > 0)
             {
-                visit(idx, bits);
-                visited++;
-                _diag.DownVisits++;
+                PopWalk(out uint idx, out Ch inherited);
+                if (!_table.IsIndexAlive(idx)) continue;
+
+                Ch own = (Ch)_table.GetDirty(idx) & ChMask.Down;
+                Ch bits = inherited | own;
+                bool stamped = _table.GetSubtreeStamp(idx) == _stampEpoch;
+                if (bits == Ch.None && !stamped) continue;      // 本分支本代无事
+
+                if (own != Ch.None) _table.ClearDirty(idx, (uint)own);   // 消费即清
+                if (bits != Ch.None)
+                {
+                    visit(idx, bits);
+                    visited++;
+                    _diag.DownVisits++;
+                }
+
+                if (!_table.IsIndexVisible(idx)) { _diag.HiddenSkips++; continue; }   // 隐藏子树免下钻
+
+                // 逆序压栈 ⇒ 出栈即 DFS 前序（父先于子、兄弟按子序）
+                for (uint c = _table.LastChildIndex(idx); c != NodeTable.NoIndex; c = _table.PrevSiblingIndex(c))
+                    PushWalk(c, bits);
             }
-
-            if (!_table.IsIndexVisible(idx)) { _diag.HiddenSkips++; continue; }   // 隐藏子树免下钻
-
-            // 逆序压栈 ⇒ 出栈即 DFS 前序（父先于子、兄弟按子序）
-            for (uint c = _table.LastChildIndex(idx); c != NodeTable.NoIndex; c = _table.PrevSiblingIndex(c))
-                PushWalk(c, bits);
         }
+        finally { _drainingDown = false; }
 
         // 这一代消费完了：推进代号，此后（P7/P8 的违约写、以及**帧外**的常规用户写）落在下一代，
         // 由下一次下钻收走。推进点必须在这里而不是帧首——见 FrameStamp 的文档。
-        _stampEpoch = _stampEpoch == uint.MaxValue ? 1u : _stampEpoch + 1u;
+        // u32 回绕那一趟顺带整列清戳（每 2^32 次下钻一次 O(n)，修复 3）：不清的话陈年戳可能恰等于
+        // 新代号，StampChain 的「本代已戳即停」在归纳不成立的节点上骗停——祖先没被盖戳，
+        // 下行通道整条丢失。「最坏只多一次冗余下钻」对不清列的回绕不成立（2026-08 审计）。
+        if (_stampEpoch == uint.MaxValue)
+        {
+            _stampEpoch = 1u;
+            _table.ResetSubtreeStamps();
+        }
+        else _stampEpoch++;
+
+        // 走查期间挂起的置戳：按新代整链补戳（在回绕清列**之后**，清列清不掉它们）。
+        for (int k = 0; k < _pendingCount; k++)
+        {
+            uint idx = _pendingStamp[k];
+            if (_table.IsIndexAlive(idx)) StampChain(idx);
+        }
+        _pendingCount = 0;
         return visited;
     }
 

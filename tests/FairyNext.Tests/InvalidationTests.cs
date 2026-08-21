@@ -96,6 +96,10 @@ public static partial class Program
         DownDrainSkipsHiddenSubtree();
         HiddenSubtreeRedrilledOnShow();
         DownChannelsNeverEnterQueues();
+        MarkDownDuringDrainLandsInNextGeneration();
+        ReattachedStampedSubtreeIsRedrilled();
+        DetachedWritesSurviveReattachAcrossGenerations();
+        EpochWrapClearsStaleStamps();
 
         BoundsStopsAtDirtyAncestor();
         BoundsConsumeClearsSubtree();
@@ -457,6 +461,138 @@ public static partial class Program
         Check("方向语义：下行通道不入任何上行队列（只置位 + 置戳）",
             TotalQueued(inv) == 0 && inv.Diagnostics.Enqueued == 0
             && inv.IsDirty(chain[2], Ch.DownLayer) && inv.IsStampedThisFrame(t.Root));
+    }
+
+    // ── M1-14b 修复 1：走查期间的 MarkDown 不许「出生即过期」 ────────────────
+    //
+    // 2026-08 审计（BUSY 场景实测）：DrainDown 趟末把正被消费的代作废；走查回调里发出的
+    // MarkDown 盖的正是这一代——目标分支已出栈时，下一趟从根第一步就判「本代无事」，
+    // 脏位搁浅到该节点被无关原因再次戳中为止（visited=1、分支永久滞留）。
+    // M1-14 消灭的「出生即过期」换了个位置复发；修法是走查期间置戳入挂起集、趟末按新代补戳。
+
+    private static void MarkDownDuringDrainLandsInNextGeneration()
+    {
+        var t = new NodeTable();
+        var d = t.CreateNode(NodeType.Component);
+        var dc = t.CreateNode(NodeType.Image);
+        var e = t.CreateNode(NodeType.Image);
+        t.AddChild(t.Root, d);
+        t.AddChild(d, dc);
+        t.AddChild(t.Root, e);                       // 兄弟序：d 先于 e 出栈
+        var inv = new Invalidation(t);
+
+        inv.BeginFrame(1);
+        inv.Mark(e, Ch.DownColor, InvalidateReason.UserWrite);
+        t.Phase = FramePhase.P6_Settle;
+        int busy = inv.DrainDown((idx, bits) =>
+        {
+            // 走查回调（BUSY 窗口）：对已出栈的 d 分支发下行 Mark
+            if (idx == e.Index) inv.MarkDown(d, Ch.DownColor, InvalidateReason.CascadeDown);
+        });
+
+        t.Phase = FramePhase.P3_Commands;
+        inv.BeginFrame(2);
+        t.Phase = FramePhase.P6_Settle;
+        var seen = new List<uint>();
+        int next = inv.DrainDown((idx, bits) => seen.Add(idx));
+
+        Check("修复 1：走查期间对已出栈分支的 MarkDown 落进下一代——下一趟整支被下钻到，脏位不搁浅",
+            busy == 1 && next == 2 && seen.Contains(d.Index) && seen.Contains(dc.Index)
+            && !inv.IsDirty(d, Ch.DownColor));
+    }
+
+    // ── M1-14b 修复 2：重接父不许打破「已戳 ⇒ 祖先全已戳」 ──────────────────
+
+    private static void ReattachedStampedSubtreeIsRedrilled()
+    {
+        var t = new NodeTable();
+        var p1 = t.CreateNode(NodeType.Component);
+        var p2 = t.CreateNode(NodeType.Component);
+        var s = t.CreateNode(NodeType.Component);
+        var x = t.CreateNode(NodeType.Image);
+        t.AddChild(t.Root, p1); t.AddChild(t.Root, p2);
+        t.AddChild(p1, s); t.AddChild(s, x);
+        var inv = new Invalidation(t);
+        inv.BeginFrame(1);
+        t.Phase = FramePhase.P6_Settle;
+        inv.DrainDown((idx, bits) => { });           // 定形一代
+
+        // 审计场景原样：帧外先写 α（s 戳当前代），再把已戳子树挂到未戳的 p2 下
+        t.Phase = FramePhase.P3_Commands;
+        inv.BeginFrame(2);
+        t.SetAlpha(s, 0.5f);
+        t.AddChild(p2, s);
+
+        t.Phase = FramePhase.P6_Settle;
+        var seen = new List<uint>();
+        int visited = inv.DrainDown((idx, bits) => seen.Add(idx));
+
+        Check("修复 2：已戳子树重接到未戳父下，重接钩子经 RestampOnShow 补挂——本代照常下钻整支，脏位不丢",
+            visited >= 2 && seen.Contains(s.Index) && seen.Contains(x.Index)
+            && !inv.IsDirty(s, Ch.DownColor));
+    }
+
+    private static void DetachedWritesSurviveReattachAcrossGenerations()
+    {
+        var t = new NodeTable();
+        var p1 = t.CreateNode(NodeType.Component);
+        var p2 = t.CreateNode(NodeType.Component);
+        var s = t.CreateNode(NodeType.Component);
+        var x = t.CreateNode(NodeType.Image);
+        t.AddChild(t.Root, p1); t.AddChild(t.Root, p2);
+        t.AddChild(p1, s); t.AddChild(s, x);
+        var inv = new Invalidation(t);
+
+        t.Phase = FramePhase.P3_Commands;
+        inv.BeginFrame(1);
+        t.RemoveFromParent(s);                       // 摘链
+        t.SetAlpha(x, 0.5f);                         // 树外写：置戳只到摘链根 s 为止
+        t.Phase = FramePhase.P6_Settle;
+        int offTree = inv.DrainDown((idx, bits) => { });   // s 不在树上，这一代等不到它；代被作废
+
+        t.Phase = FramePhase.P3_Commands;
+        inv.BeginFrame(2);
+        t.AddChild(p2, s);                           // 隔代接回：子树内部的戳停留在旧代
+        t.Phase = FramePhase.P6_Settle;
+        var seen = new List<uint>();
+        int visited = inv.DrainDown((idx, bits) => seen.Add(idx));
+
+        Check("修复 2：摘链期间的下行写在隔代接回后仍被收走（补挂整棵子树，只补父链救不了内部旧戳）",
+            offTree == 0 && visited >= 2 && seen.Contains(x.Index)
+            && !inv.IsDirty(x, Ch.DownColor));
+    }
+
+    // ── M1-14b 修复 3：代号 u32 回绕整列清戳 ────────────────────────────────
+
+    private static void EpochWrapClearsStaleStamps()
+    {
+        var t = new NodeTable();
+        var a = t.CreateNode(NodeType.Component);
+        var b = t.CreateNode(NodeType.Image);
+        var c = t.CreateNode(NodeType.Image);
+        t.AddChild(t.Root, a); t.AddChild(a, b); t.AddChild(t.Root, c);
+        var inv = new Invalidation(t);
+        t.Phase = FramePhase.P6_Settle;
+
+        // 制造「陈年戳 == 回绕后的新代号」的撞车地形：a/b 停留在代 1 的戳，root 被代 5 盖过。
+        inv.Mark(b, Ch.DownColor, InvalidateReason.UserWrite);   // 代 1：戳 b,a,root
+        inv.DrainDown((idx, bits) => { });                        // 消费，代 → 2
+        inv.ForceStampEpochForTest(5);
+        inv.Mark(c, Ch.DownColor, InvalidateReason.UserWrite);   // 代 5：戳 c,root（a/b 仍是 1）
+        inv.DrainDown((idx, bits) => { });                        // 消费，代 → 6
+
+        inv.ForceStampEpochForTest(uint.MaxValue);
+        inv.DrainDown((idx, bits) => { });                        // 空趟：回绕，代 → 1 并整列清戳
+
+        // 不清列的话：b 的陈年戳 1 == 新代 1，「本代已戳即停」在 b 上骗停，root（戳 5）不被盖——
+        // 从根路由第一步就死，b 的 DownColor 永久搁浅（审计：「最坏只多一次冗余下钻」不成立）。
+        inv.Mark(b, Ch.DownColor, InvalidateReason.UserWrite);
+        var seen = new List<uint>();
+        int visited = inv.DrainDown((idx, bits) => seen.Add(idx));
+
+        Check("修复 3：代号回绕整列清戳——陈年戳撞上新代号骗停置戳的形状在结构上不存在",
+            visited == 1 && seen.Contains(b.Index) && !inv.IsDirty(b, Ch.DownColor)
+            && inv.FrameStamp == 2);
     }
 
     // ── BoundsD：置父链、遇脏即停、query-pull ───────────────────────────────

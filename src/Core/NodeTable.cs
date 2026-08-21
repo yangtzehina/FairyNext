@@ -157,6 +157,14 @@ public sealed partial class NodeTable
     /// <param name="source">写来源（裁决 1/4：系统写不经用户入口）。</param>
     internal delegate void MarkHandler(NodeTable table, uint index, Ch channel, WriteSource source);
 
+    /// <summary>
+    /// 重接钩子（M1-14b 修复 2）：<see cref="AddChildAt"/> 把节点接到**新父**下时调用一次
+    /// （同父插入/换序不调；参数是被重接节点的下标与写来源）。失效平面用它维持下行子树戳的
+    /// 归纳基础「已戳 ⇒ 祖先全已戳」——已戳子树挂到未戳父下时补挂整棵子树的下行重算，
+    /// 树自己不解释戳值（方向语义归失效平面，与 <see cref="InvalidationHook"/> 同一条纪律）。
+    /// </summary>
+    internal Action<uint, WriteSource>? ReattachHook { get; set; }
+
     /// <summary>建表并创建根节点。</summary>
     /// <param name="tree">树域 id。</param>
     /// <param name="initialCapacity">初始槽数（含保留槽 0）；之后按 2 倍扩容。</param>
@@ -422,6 +430,12 @@ public sealed partial class NodeTable
 
     /// <summary>写向下通道子树戳（P6 只下钻 stamp==frameId 的子树）。</summary>
     internal void SetSubtreeStamp(uint index, uint frameId) => _subtreeStamp[index] = frameId;
+
+    /// <summary>
+    /// 整列清戳（M1-14b 修复 3：代号 u32 回绕时由失效平面调一次，每 2^32 次下钻一回 O(n)）。
+    /// 0 是「未戳」哨兵——清零后陈年戳不可能撞上新代号，「已戳 ⇒ 祖先全已戳」的归纳不因回绕失效。
+    /// </summary>
+    internal void ResetSubtreeStamps() => Array.Clear(_subtreeStamp, 0, _subtreeStamp.Length);
 
     // ── 下标级拓扑读（失效平面的父链置位 / 子树下钻按下标走，句柄化每步都做太贵）──
     // 架构文档「平面二 ↔ 节点核心」接缝：本平面依赖 NodeTable.Parent/IsAlive 做父链置位与代际校验。

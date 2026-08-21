@@ -143,6 +143,9 @@ public sealed partial class NodeTable
         Mark(p, Ch.Structure, src);
         // 子树的 world 需要在 P6 重算：结构位归父、变换位归子，两条都要给失效平面。
         Mark(c, Ch.Transform, src);
+        // 重接（含从摘链状态接回）可能把「已戳子树」挂到未戳父链下，打破下行路由的归纳基础
+        // 「已戳 ⇒ 祖先全已戳」；是否补挂由失效平面按子树戳裁决（M1-14b 修复 2）。
+        if (old != p) ReattachHook?.Invoke(c, src);
         return true;
     }
 
