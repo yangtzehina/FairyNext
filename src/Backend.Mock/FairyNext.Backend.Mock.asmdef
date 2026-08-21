@@ -1,0 +1,20 @@
+{
+    "name": "FairyNext.Backend.Mock",
+    "rootNamespace": "FairyNext.Backend.Mock",
+    "references": [
+        "FairyNext.Core",
+        "FairyNext.Contracts",
+        "FairyNext.Numerics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

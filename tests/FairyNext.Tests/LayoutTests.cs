@@ -733,10 +733,12 @@ public static partial class Program
             f.Table.SetResolved(slotted, 1f, 2f, 3f, 4f, WriteSource.User);   // 帧外（P3 窗口）+ 错来源
         }
         finally { UiAssert.Handler = null; }
+        // 门是 UiAssert（Conditional("DEBUG")）：Release 下调用点整体消失，按 DebugGates 惯例放行——
+        // M1-16 交付时只在 Release 下构建未运行，这条在 Release 恒红的期望是它留下的缺陷（M1-15 修）。
         Check("布局 · resolved 唯一写者门：非 Layout 来源 + 非 P5 相位双双断言（gear/tween 在类型上无此写口）",
-            fired.Count >= 2
+            !DebugGates || (fired.Count >= 2
             && fired.Exists(m => m.Contains("唯一写者") && m.Contains("Layout"))
-            && fired.Exists(m => m.Contains("仅 P5")));
+            && fired.Exists(m => m.Contains("仅 P5"))));
     }
 
     private static void LayoutEngineAttachIsExclusive()

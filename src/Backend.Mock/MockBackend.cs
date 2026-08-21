@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using FairyNext.Core;
 using FairyNext.Core.Rendering;
 
@@ -181,6 +182,23 @@ public sealed class MockBackend : IRenderBackend
     /// </summary>
     public Func<FramePhase>? PhaseProbe { get; set; }
 
+    /// <summary>
+    /// **上传字节神谕**的镜像探针（可选；M1-15，2026-08 审计验收项）。装上后两道核对上线：
+    ///  ① <see cref="UploadInstances"/> 收到的每个区间，与「从 CPU 镜像重读同区间」**逐字节**比对——
+    ///     增量正确性门比的是流的 CPU 镜像自身，P8 真正交给后端的字节此前没有第二条腿；
+    ///  ② <see cref="EndFrame"/> 时把后端累积的整份实例/裁剪/槽表与镜像全量对拍——
+    ///     「上传区间并集 ⊇ 两帧镜像的差异字节」的执法形态：漏上传的区间在这里现形
+    ///     （后端侧停在旧值，镜像已前进）。
+    /// 不符一律进 <see cref="Violations"/>（release 照记）。探针返回 null 或句柄不符 = 该流不核对。
+    /// </summary>
+    public Func<StreamHandle, RenderStream?>? MirrorProbe { get; set; }
+
+    /// <summary>神谕①的执行次数（正例必须断言它非零——静默未布防的门等于没有门）。</summary>
+    public long UploadOracleChecks { get; private set; }
+
+    /// <summary>神谕②（EndFrame 全量对拍）的执行次数。</summary>
+    public long MirrorSweeps { get; private set; }
+
     // ── IRenderBackend：身份与能力 ──────────────────────────────────────────
 
     /// <inheritdoc/>
@@ -336,6 +354,10 @@ public sealed class MockBackend : IRenderBackend
         if (!stats.Dirty && _uploadsThisFrame > 0)
             Violate($"stats.Dirty=false 却发生了 {_uploadsThisFrame} 次上传——零脏帧判据与实际排水不一致");
 
+        // 神谕②：帧末全量对拍——后端累积态 ≡ CPU 镜像。上传区间并集若没盖住镜像的全部差异字节，
+        // 后端侧就停在旧值，这里现形（增量门两腿共读镜像，恰恰盖不住这一类）。
+        if (MirrorProbe != null && _inFrame) SweepMirrors();
+
         Ticks++;
         bool presented = stats.Dirty && _drawsThisFrame > 0;
         if (presented) Presents++;
@@ -440,6 +462,27 @@ public sealed class MockBackend : IRenderBackend
                 Violate($"quad {firstQuad + i} 的 route 保留位非零（0x{quads[i].Route:X8}）");
             if (AbiMock.FlagsReservedLow(quads[i].Flags) != 0 || AbiMock.FlagsReservedHigh(quads[i].Flags) != 0)
                 Violate($"quad {firstQuad + i} 的 flags 保留位非零（0x{quads[i].Flags:X8}）");
+        }
+
+        // 神谕①：上传的字节 ≡ 从 CPU 镜像重读同区间（探针装上才跑；见 MirrorProbe 文档）。
+        RenderStream? mirror = MirrorProbe?.Invoke(stream);
+        if (mirror != null && mirror.Handle.Equals(stream))
+        {
+            UploadOracleChecks++;
+            ReadOnlySpan<QuadInstance> mq = mirror.Quads;
+            if (firstQuad + quads.Length > mq.Length)
+            {
+                Violate($"上传神谕：区间 [{firstQuad},{firstQuad + quads.Length}) 越出 CPU 镜像的 {mq.Length} 实例");
+            }
+            else
+            {
+                ReadOnlySpan<byte> got = MemoryMarshal.AsBytes(quads);
+                ReadOnlySpan<byte> want = MemoryMarshal.AsBytes(mq.Slice(firstQuad, quads.Length));
+                int diff = FirstByteDifference(got, want);
+                if (diff >= 0)
+                    Violate($"上传神谕：上传字节与 CPU 镜像不符——quad {firstQuad + diff / AbiMock.QuadInstanceSize}"
+                          + $" 内偏移 {diff % AbiMock.QuadInstanceSize}（区间 [{firstQuad},{firstQuad + quads.Length})）");
+            }
         }
 
         EnsureQuads(s, firstQuad + quads.Length);
@@ -723,6 +766,76 @@ public sealed class MockBackend : IRenderBackend
     }
 
     // ── 内部 ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 神谕②本体：对每条「探针认领」的活流，把后端累积的实例/裁剪/槽三表与 CPU 镜像对拍。
+    /// 比的是镜像长度的前缀——整编收缩后后端尾巴上的陈旧字节不在任何段的绘制区间里，不算账。
+    /// </summary>
+    private void SweepMirrors()
+    {
+        for (int i = 0; i < _streams.Count; i++)
+        {
+            MockStream s = _streams[i];
+            if (!s.Alive) continue;
+            var handle = new StreamHandle(i + 1, s.Gen);
+            RenderStream? mirror = MirrorProbe?.Invoke(handle);
+            if (mirror == null || !mirror.Handle.Equals(handle)) continue;
+            MirrorSweeps++;
+
+            ReadOnlySpan<QuadInstance> mq = mirror.Quads;
+            if (s.QuadCount < mq.Length)
+            {
+                Violate($"上传神谕：镜像有 {mq.Length} 实例、后端只累积到 {s.QuadCount}——有区间从未被上传");
+            }
+            else
+            {
+                int diff = FirstByteDifference(
+                    MemoryMarshal.AsBytes(new ReadOnlySpan<QuadInstance>(s.Quads, 0, mq.Length)),
+                    MemoryMarshal.AsBytes(mq));
+                if (diff >= 0)
+                    Violate($"上传神谕：帧末后端实例与 CPU 镜像不符——quad {diff / AbiMock.QuadInstanceSize}"
+                          + $" 内偏移 {diff % AbiMock.QuadInstanceSize}（上传区间并集没盖住该差异字节）");
+            }
+
+            ReadOnlySpan<ClipEntry> mc = mirror.Clips.Entries;
+            if (s.ClipCount < mc.Length)
+            {
+                Violate($"上传神谕：镜像有 {mc.Length} 条裁剪条目、后端只累积到 {s.ClipCount}");
+            }
+            else
+            {
+                int diff = FirstByteDifference(
+                    MemoryMarshal.AsBytes(new ReadOnlySpan<ClipEntry>(s.Clips, 0, mc.Length)),
+                    MemoryMarshal.AsBytes(mc));
+                if (diff >= 0)
+                    Violate($"上传神谕：帧末后端裁剪条目 {diff / AbiMock.ClipEntrySize} 与 CPU 镜像不符");
+            }
+
+            ReadOnlySpan<SlotEntry> ms = mirror.Slots.Entries;
+            if (s.SlotCount < ms.Length)
+            {
+                Violate($"上传神谕：镜像有 {ms.Length} 个槽、后端只累积到 {s.SlotCount}");
+            }
+            else
+            {
+                // 槽按语义比（矩阵 + 标志）：Owner/WriteFreq 是 CPU 簿记，本就不影响像素。
+                for (int k = 0; k < ms.Length; k++)
+                {
+                    if (s.Slots[k].Equals(ms[k])) continue;
+                    Violate($"上传神谕：帧末后端槽 {k} 与 CPU 镜像不符（{s.Slots[k]} vs {ms[k]}）");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>首个不同字节的下标（全等返回 -1）。</summary>
+    private static int FirstByteDifference(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+    {
+        int n = a.Length < b.Length ? a.Length : b.Length;
+        for (int i = 0; i < n; i++) if (a[i] != b[i]) return i;
+        return a.Length == b.Length ? -1 : n;
+    }
 
     private void Log(MockCallKind kind, int stream, int first, int count, string? detail) =>
         _calls.Add(new MockCall(kind, _frameId, stream, first, count, detail));

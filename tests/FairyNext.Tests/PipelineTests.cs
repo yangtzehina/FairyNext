@@ -138,6 +138,9 @@ public static partial class Program
             Pipe.Attach();
             Gate = new IncrementalGate(Pipe);
             Backend.PhaseProbe = () => Kernel.CurrentPhase;   // 后端调用只该发生在 P7/P8
+            // M1-15 上传字节神谕随行全部管线用例：上传区间逐字节对拍 CPU 镜像 + 帧末全量对拍。
+            // 它是增量门的第三条腿——门的两条腿共读镜像，真正交给后端的字节此前没人对过账。
+            Backend.MirrorProbe = h => h.Equals(Stream.Handle) ? Stream : null;
         }
 
         internal NodeHandle Leaf(in LeafSpec spec, float x, float y, float w, float h, NodeHandle parent = default)

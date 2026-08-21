@@ -1,0 +1,21 @@
+{
+    "name": "FairyNext.Backend.Unity.Editor",
+    "rootNamespace": "FairyNext.UnityBackend.Editor",
+    "references": [
+        "FairyNext.Backend.Unity",
+        "FairyNext.Core",
+        "FairyNext.Contracts",
+        "FairyNext.Numerics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

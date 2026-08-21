@@ -1,0 +1,16 @@
+{
+  "dependencies": {
+    "com.fairynext.core": {
+      "version": "file:../../src",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {}
+    },
+    "com.unity.modules.imageconversion": {
+      "version": "1.0.0",
+      "depth": 0,
+      "source": "builtin",
+      "dependencies": {}
+    }
+  }
+}

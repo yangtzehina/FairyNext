@@ -18,6 +18,14 @@ public static class AbiGenerator
     public const string MockPath = "src/Backend.Mock/AbiMock.g.cs";
     public const string HlslPath = "shaders/abi.g.hlsl";
 
+    /// <summary>
+    /// Unity 工程内的 HLSL include 副本（M1-15）：与 <see cref="HlslPath"/> **逐字节相同**。
+    /// 为什么要第二份：Unity 的 shader include 解析不出工程目录（unity/ 是工程根，shaders/ 在其外），
+    /// 符号链接在导入器与版本控制上都不可靠。与 AbiMock.g.cs 同一纪律——副本同源生成，
+    /// 漂移由字节比对门拦，手改任何一份都是缺陷。
+    /// </summary>
+    public const string UnityHlslPath = "unity/Assets/FairyNext/Shaders/abi.g.hlsl";
+
     private const string QuadPrefix = "Quad";
     private const string ClipPrefix = "Clip";
     private const string RoutePrefix = "Route";
@@ -26,13 +34,18 @@ public static class AbiGenerator
 
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
-    /// <summary>三份生成物，顺序固定（C# 布局 → mock 常量 → HLSL include）。</summary>
-    public static GeneratedFile[] GenerateAll() => new[]
+    /// <summary>四份生成物，顺序固定（C# 布局 → mock 常量 → HLSL include → Unity 侧 HLSL 副本）。</summary>
+    public static GeneratedFile[] GenerateAll()
     {
-        new GeneratedFile(CsLayoutPath, GenerateCsLayout()),
-        new GeneratedFile(MockPath, GenerateMock()),
-        new GeneratedFile(HlslPath, GenerateHlsl()),
-    };
+        string hlsl = GenerateHlsl();
+        return new[]
+        {
+            new GeneratedFile(CsLayoutPath, GenerateCsLayout()),
+            new GeneratedFile(MockPath, GenerateMock()),
+            new GeneratedFile(HlslPath, hlsl),
+            new GeneratedFile(UnityHlslPath, hlsl),
+        };
+    }
 
     /// <summary>文本 → 落盘字节：无 BOM UTF-8。字节比对门比的就是这一串。</summary>
     public static byte[] Encode(string text) => Utf8NoBom.GetBytes(text);

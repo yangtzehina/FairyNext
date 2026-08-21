@@ -1,0 +1,18 @@
+{
+    "name": "FairyNext.Backend.Unity",
+    "rootNamespace": "FairyNext.UnityBackend",
+    "references": [
+        "FairyNext.Core",
+        "FairyNext.Contracts",
+        "FairyNext.Numerics"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -17,9 +17,19 @@ namespace FairyNext.Core.Rendering;
 ///
 /// 一个实例服务**一条流 = 一个面板**（机制 10「流按面板拆分防大流抖动」）。多面板 = 多实例，
 /// 各自的 <see cref="Extract.PanelRoot"/> 负责把别人的结构脏挡在门外。
+/// 多实例共驱**同一个内核**时不各自 <see cref="Attach"/>（相位钩子硬独占，第二个就 throw）——
+/// 由 <see cref="PanelFanout"/> 占钩子并逐面板分发（M1-15）。
 /// </summary>
 public sealed class RenderPipeline
 {
+    /// <summary>接线形态：独立占内核钩子（Solo）或登记在 <see cref="PanelFanout"/> 名下（Fanout）。</summary>
+    private enum AttachMode : byte
+    {
+        None = 0,
+        Solo = 1,
+        Fanout = 2,
+    }
+
     private readonly UiKernel _kernel;
     private readonly NodeTable _table;
     private readonly Invalidation _invalidation;
@@ -32,7 +42,7 @@ public sealed class RenderPipeline
     private NodeHandle[] _roots = new NodeHandle[32];
     private int _rootCount;
     private int _rebuildsAtSettle;
-    private bool _attached;
+    private AttachMode _mode;
 
     /// <summary>接一条流、一棵树（经内核）与一个后端。</summary>
     /// <param name="kernel">相位机（其树域即本管线的树域）。</param>
@@ -149,14 +159,17 @@ public sealed class RenderPipeline
     /// <exception cref="InvalidOperationException">本实例已 Attach，或内核的渲染钩子已被占用。</exception>
     public void Attach()
     {
-        if (_attached)
+        if (_mode == AttachMode.Fanout)
+            throw new InvalidOperationException(
+                "RenderPipeline 已登记在 PanelFanout 名下——面板由扇出件驱动，不再单独 Attach。");
+        if (_mode != AttachMode.None)
             throw new InvalidOperationException("RenderPipeline 重复 Attach（换后端或重接前先 Detach）");
         if (_kernel.SettleStep != null || _kernel.DownStep != null
             || _kernel.DrainTailStep != null || _kernel.SubmitStep != null)
             throw new InvalidOperationException(
                 "UiKernel 的渲染钩子已被占用：一个内核同时只能接一条 RenderPipeline。"
                 + "静默覆盖会让先接的管线整帧停摆（其后端每帧 BeginFrame 永不 EndFrame）——"
-                + "先对旧管线调 Detach，多面板扇出件见 M1-15。");
+                + "先对旧管线调 Detach；多面板共驱一个内核走 PanelFanout（M1-15）。");
         _kernel.SettleStep = SettleStep;
         _kernel.DownStep = DownVisit;
         _kernel.DrainTailStep = DrainTail;
@@ -164,13 +177,21 @@ public sealed class RenderPipeline
         _kernel.BeforeFrame += OnBeforeFrame;
         _invalidation.Register(_drain);
         _invalidation.Register(_extract);
-        _attached = true;
+        _mode = AttachMode.Solo;
     }
 
-    /// <summary>卸线（测试拆装用；流与后端不动）。</summary>
+    /// <summary>
+    /// 卸线（测试拆装用；流与后端不动）。登记在 <see cref="PanelFanout"/> 名下时**抛异常**：
+    /// 那时内核钩子归扇出件所有，这里的置空会把扇出件（连同其余面板）整个拆哑——
+    /// 摘一个面板的正确入口是 <c>fanout.Remove(pipeline)</c>。
+    /// </summary>
     public void Detach()
     {
-        if (!_attached) return;
+        if (_mode == AttachMode.Fanout)
+            throw new InvalidOperationException(
+                "面板由 PanelFanout 托管：用 fanout.Remove(pipeline) 摘除。"
+                + "Detach 会置空扇出件占用的内核钩子，连带拆哑其余面板。");
+        if (_mode != AttachMode.Solo) return;
         _kernel.SettleStep = null;
         _kernel.DownStep = null;
         _kernel.DrainTailStep = null;
@@ -178,8 +199,57 @@ public sealed class RenderPipeline
         _kernel.BeforeFrame -= OnBeforeFrame;
         _invalidation.Unregister(_drain);
         _invalidation.Unregister(_extract);
-        _attached = false;
+        _mode = AttachMode.None;
     }
+
+    // ── 扇出件接缝（PanelFanout 专用；语义 = Attach 的五个落点拆成可单独调度的步）──
+
+    /// <summary>相位机（扇出件核对「面板与扇出件同内核」用）。</summary>
+    internal UiKernel Kernel => _kernel;
+
+    /// <summary>登记进扇出件（独占：已 Attach 或已登记即抛；此后 <see cref="Attach"/>/<see cref="Detach"/> 被封）。</summary>
+    internal void JoinFanout()
+    {
+        if (_mode != AttachMode.None)
+            throw new InvalidOperationException(_mode == AttachMode.Solo
+                ? "RenderPipeline 已单独 Attach——进扇出件前先 Detach"
+                : "RenderPipeline 已登记在另一个 PanelFanout 名下");
+        _mode = AttachMode.Fanout;
+    }
+
+    /// <summary>从扇出件摘除（只回 None，不碰内核钩子——钩子归扇出件）。</summary>
+    internal void LeaveFanout()
+    {
+        if (_mode == AttachMode.Fanout) _mode = AttachMode.None;
+    }
+
+    /// <summary>帧首：开本面板后端的帧括号（扇出件保证各面板后端互异，括号不重入）。</summary>
+    internal void StepBeginFrame(ulong frameId) => OnBeforeFrame(frameId);
+
+    /// <summary>P6 头：定格「本帧 settle 时已重编几次」的基线（DrainTail 判「本帧已整编过」用）。</summary>
+    internal void StepSettleBaseline() => _rebuildsAtSettle = _extract.Rebuilds;
+
+    /// <summary>
+    /// P6 下钻的**落叶半步**（表级的 <see cref="NodeTable.CascadeVisualAt"/> 由调用方做一次，
+    /// 本步只管「该节点在我的流里有叶 ⇒ 把级联变化交回上行通道」；不在我的流里 = 无声跳过，
+    /// 于是多面板下同一次下钻只有叶的属主面板落账）。
+    /// </summary>
+    internal void StepDownLeaf(uint index, Ch channels)
+    {
+        NodeHandle node = _table.HandleOf(index);
+        if (node.IsNone || _drain.LeafOf(node) < 0) return;   // 不在流里：进/出流是结构的事
+
+        Ch up = Ch.None;
+        if ((channels & (Ch.DownColor | Ch.DownLayer)) != 0) up |= Ch.Color;
+        if ((channels & Ch.DownVisible) != 0) up |= Ch.Visible;
+        if (up != Ch.None) _invalidation.Mark(node, up, InvalidateReason.CascadeDown);
+    }
+
+    /// <summary>P7 收尾（扇出件逐面板调；语义与独立接线的 DrainTail 完全相同）。</summary>
+    internal void StepDrainTail(ref FrameContext ctx) => DrainTail(ref ctx);
+
+    /// <summary>P8 提交（扇出件逐面板调；语义与独立接线的 SubmitStep 完全相同）。</summary>
+    internal void StepSubmit(ref FrameContext ctx) => SubmitStep(ref ctx);
 
     private void OnBeforeFrame(ulong frameId) => _backend.BeginFrame(frameId);
 
@@ -198,7 +268,7 @@ public sealed class RenderPipeline
     /// </summary>
     private void SettleStep(ref FrameContext ctx)
     {
-        _rebuildsAtSettle = _extract.Rebuilds;
+        StepSettleBaseline();
         _rootCount = 0;
         CollectRoots(Ch.Transform);
         CollectRoots(Ch.Layout);
@@ -230,14 +300,7 @@ public sealed class RenderPipeline
     {
         _table.CascadeVisualAt(index);
         DownVisits++;
-
-        NodeHandle node = _table.HandleOf(index);
-        if (node.IsNone || _drain.LeafOf(node) < 0) return;   // 不在流里：进/出流是结构的事
-
-        Ch up = Ch.None;
-        if ((channels & (Ch.DownColor | Ch.DownLayer)) != 0) up |= Ch.Color;
-        if ((channels & Ch.DownVisible) != 0) up |= Ch.Visible;
-        if (up != Ch.None) _invalidation.Mark(node, up, InvalidateReason.CascadeDown);
+        StepDownLeaf(index, channels);
     }
 
     // ── P7 收尾：升级重编 + 剪枝 + 孤岛 + 神谕 ──────────────────────────────

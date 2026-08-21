@@ -1,0 +1,8 @@
+{
+  "name": "com.fairynext.core",
+  "version": "0.1.0",
+  "displayName": "FairyNext Core",
+  "description": "FairyGUI green-field rewrite runtime: SoA node tree + GPU-resident quad instance stream + push invalidation protocol. Pure C# (netstandard2.1), zero Unity dependencies in the runtime assemblies; imported into Unity as a local package (file:../../src). The Unity vertex-stream backend lives in the host project (unity/Assets/FairyNext). Property setters are generated at compile time by the bundled Roslyn analyzer (Core/Analyzers/FairyNext.PropGen.dll, label RoslynAnalyzer) — Core does not compile without it.",
+  "unity": "2022.3",
+  "author": { "name": "FairyNext" }
+}

@@ -43,6 +43,9 @@ public static partial class Program
         LayoutSuite();       // M1-16 布局：约束图（拓扑序/分层拒环/offset 捕获）+ LinearLayout +
                              // parentUsesSize 受控窗 + **P5 幂等断言与布局差分神谕（L2）**上线，
                              // 正例负例各配，用例在 LayoutTests.cs（partial）
+        BackendM15Suite();   // M1-15 Core/mock 半边：多面板扇出件（PanelFanout——钩子单占下的
+                             // 分发/路由/帧边界安全）+ **上传字节神谕**（MirrorProbe：上传区间
+                             // 逐字节对拍 CPU 镜像 + 帧末全量对拍），用例在 BackendM15Tests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;
