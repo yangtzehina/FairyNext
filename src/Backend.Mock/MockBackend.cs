@@ -321,6 +321,13 @@ public sealed class MockBackend : IRenderBackend
         if (!_inFrame) Violate("EndFrame 于帧括号外");
         if (_openPasses.Count != 0) Violate($"EndFrame 时仍有 {_openPasses.Count} 个离屏 pass 未关");
 
+        // 2026-08 审计：stats.FrameId 从前无人校验——BuildStats 拿错帧号（例如缓存了上一帧的 ctx）
+        // 会让收据、零脏帧短路与逐帧哈希全部记到别的帧上，而门照绿。帧括号是唯一的对表点：
+        // 与 BeginFrame 的帧号不一致即违约（进 Violations，release 照记；0 = 未接帧号的裸调用，放行）。
+        if (_inFrame && stats.FrameId != 0 && stats.FrameId != _frameId)
+            Violate($"EndFrame 的 stats.FrameId={stats.FrameId} 与 BeginFrame 的帧号 {_frameId} 不一致"
+                  + "——BuildStats 拿的是别的帧的账");
+
         // 不变量 5：预算超限而无阶梯事件 = 失败。降级可以有，静默不可以。
         if (_budgetOverflowThisFrame && _degradesThisFrame == 0)
             Violate("预算超限（槽/clip）却没有任何降级阶梯事件——静默降级是被禁的那一种");

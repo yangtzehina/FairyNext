@@ -78,8 +78,9 @@ public sealed class RenderPipeline
     public bool Present { get; set; } = true;
 
     /// <summary>
-    /// 是否每帧跑一次派生列神谕（<see cref="NodeTable.DerivedMatchesFullRecompute"/>）。
-    /// 诊断/测试构建打开：帧时间约 ×1.5，发布版关掉即零成本。
+    /// 是否每帧跑一次派生列神谕（<see cref="NodeTable.DerivedMatchesFullRecompute"/>）
+    /// 与序神谕（<see cref="NodeTable.ValidatePaintOrder"/>）。
+    /// 诊断/测试构建打开：帧时间约 ×1.5 再加序神谕的 O(树²) 重展比对，发布版关掉即零成本。
     /// </summary>
     public bool DerivedOracle { get; set; }
 
@@ -88,6 +89,17 @@ public sealed class RenderPipeline
 
     /// <summary>派生列神谕首个不一致的节点下标（<see cref="NodeTable.NoIndex"/> = 全等）。</summary>
     public uint DerivedBadIndex { get; private set; } = NodeTable.NoIndex;
+
+    /// <summary>
+    /// 序神谕（<see cref="NodeTable.ValidatePaintOrder"/>）的失败次数。
+    /// 2026-08 审计：它此前只被结构编辑的**定向用例**调用，切片拼接的簿记错误
+    /// （如「清扫整体先于拼接」被改成边清边拼）在帧级从未被逐帧核对——
+    /// 现在 <see cref="DerivedOracle"/> 开着时每帧在 P7 收尾顺带跑一次。
+    /// </summary>
+    public long PaintOrderFailures { get; private set; }
+
+    /// <summary>最近一次序神谕失败的人读描述（全绿为空串）。</summary>
+    public string LastPaintOrderError { get; private set; } = string.Empty;
 
     /// <summary>会话累计：P6 增量重算的节点数。</summary>
     public long DerivedNodes { get; private set; }
@@ -126,12 +138,25 @@ public sealed class RenderPipeline
     // ── 接线 ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 装钩子 + 注册排水器。钩子是**独占**的（内核一个相位一个钩子），
-    /// 排水器同样（一个通道一个消费者），所以重复 Attach 会在失效平面那侧断言。
+    /// 装钩子 + 注册排水器。钩子是**独占**的（内核一个相位一个钩子），占用检查是
+    /// **无条件硬检查**（throw，不是 <see cref="UiAssert"/>）——2026-08 审计：属性直赋的
+    /// 静默覆盖让同一内核挂第二条管线时，第一条整帧停摆且其后端每帧 BeginFrame 永不
+    /// EndFrame，Debug 也不断言（<c>UiAssert.That</c> 是 <c>[Conditional("DEBUG")]</c>，
+    /// 且旧检查只看本实例的 <c>_attached</c>，跨实例根本不设防）。Release 也必须拦：
+    /// 这是接线错误，不是运行状态。换管线先 <see cref="Detach"/>；
+    /// 多面板多流共驱一个内核的扇出件归 M1-15（届时由扇出件独占钩子、向各管线分发）。
     /// </summary>
+    /// <exception cref="InvalidOperationException">本实例已 Attach，或内核的渲染钩子已被占用。</exception>
     public void Attach()
     {
-        UiAssert.That(!_attached, "RenderPipeline 重复 Attach");
+        if (_attached)
+            throw new InvalidOperationException("RenderPipeline 重复 Attach（换后端或重接前先 Detach）");
+        if (_kernel.SettleStep != null || _kernel.DownStep != null
+            || _kernel.DrainTailStep != null || _kernel.SubmitStep != null)
+            throw new InvalidOperationException(
+                "UiKernel 的渲染钩子已被占用：一个内核同时只能接一条 RenderPipeline。"
+                + "静默覆盖会让先接的管线整帧停摆（其后端每帧 BeginFrame 永不 EndFrame）——"
+                + "先对旧管线调 Detach，多面板扇出件见 M1-15。");
         _kernel.SettleStep = SettleStep;
         _kernel.DownStep = DownVisit;
         _kernel.DrainTailStep = DrainTail;
@@ -223,6 +248,15 @@ public sealed class RenderPipeline
         {
             if (_table.DerivedMatchesFullRecompute(out uint bad)) DerivedBadIndex = NodeTable.NoIndex;
             else { DerivedBadIndex = bad; DerivedOracleFailures++; }
+
+            // 序神谕同点接入：paintOrder 在 P6 定形，此刻正是「本帧真被消费的那份序」。
+            // 定向用例只撞它自己搭的编辑序，切片拼接的簿记错（例：清扫不再整体先于拼接，
+            // 后切片子树前移时新下标被旧切片的清扫抹掉）要靠逐帧核对才收得住。
+            if (!_table.ValidatePaintOrder(out string paintErr))
+            {
+                PaintOrderFailures++;
+                LastPaintOrderError = paintErr;
+            }
         }
 
         if (_drain.StructurePending)
@@ -236,8 +270,11 @@ public sealed class RenderPipeline
             }
         }
 
-        // 包含剪枝要在 quad 落定之后跑：新几何未必还在内含矩形里，而原位重写会按叶的
-        // clipEntry 重新盖上 clipIndex——剪枝结论不会被偷偷继承，所以有变化就重跑（幂等）。
+        // 包含剪枝的**唯一落点**（2026-08 审计裁决）。要在 quad 落定之后跑：新几何未必还在
+        // 内含矩形里，而原位重写会按叶的 clipEntry 重新盖上 clipIndex——剪枝结论不会被偷偷继承，
+        // 所以有变化就重跑（幂等）。P6 的 Extract.Rebuild 里那道（PruneAfterRebuild）默认关：
+        // 结构帧跑两次时第二遍恒剪 0 条纯空扫，而 P6 剪是拿上一帧几何下结论。增量门的神谕腿
+        // 镜像的是**这道尾剪枝**（IncrementalGate.Check 里重放它），不是 Extract 的开关。
         // 零脏帧不跑：一个字节都没动过，剪枝结论按定义也没动，而空转收据要求静止帧的 CPU 侧也安静。
         if (_stream.HasPendingWork) _stream.PruneContainedClips();
 

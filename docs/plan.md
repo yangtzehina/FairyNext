@@ -61,7 +61,7 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 
 ### W11-W12 装载与孤岛
 - **M1-22 装载三操作 + 同步实例化**（~1500 行）：验证/视图/绑定（PTCH 回填/DEPS/纹理懒装载）、LoadReport、降级二分（结构性拒载 vs 哈希降 Extract）、PLAN 实例化（顶层块+嵌套 slab+memcpy+arm-not-mount）、Pool 雏形。门：**fuzz 门转常设**。
-- **M1-23 孤岛②③④**（~1200 行）：AddIsland/IIslandContent（含 StillAnimating）、visual 并入下行、②自定义材质（clip include/scissor 降级）、③外部原生（SortingGroup 对齐 run 序、Spine kind）、④stencil 括号。
+- **M1-23 孤岛②③④**（~1200 行）：AddIsland/IIslandContent（含 StillAnimating）、visual 并入下行、②自定义材质（clip include/scissor 降级）、③外部原生（SortingGroup 对齐 run 序、Spine kind）、④stencil 括号。验收项（2026-08 审计遗留）：`AnyIslandAnimating` 是零脏帧短路的第三前提，M1-14 阶段恒 false 无门——本包必须补「活孤岛自报 StillAnimating ⇒ stats.Dirty 为真、presents 照涨」的正例与「自报静止 ⇒ 短路恢复」的收据断言，否则第三前提仍是无人执法的纸面条款。
 
 ### W12-W13 验证与工具
 - **M1-24 输入带 + Trace + 回放**（~1000 行）：InputTape RLE 常开环（派生数据不入带/未录轨钉中性值）、Manual 回放、Trace 逐帧流哈希+FirstDivergentFrame、ReplayBundle。门：**回放确定性门（L3）上线**。

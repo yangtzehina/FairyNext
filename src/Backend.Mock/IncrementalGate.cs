@@ -109,6 +109,10 @@ public sealed class IncrementalGate
         _oracleExtract.PanelRoot = _liveExtract.PanelRoot;
         _oracleExtract.PruneAfterRebuild = _liveExtract.PruneAfterRebuild;
         _oracleExtract.Rebuild();
+        // 镜像**管线**而不是镜像开关（2026-08 审计：剪枝的唯一落点在 RenderPipeline.DrainTail 尾，
+        // 神谕腿只同步 Extract.PruneAfterRebuild 的话，关掉那个开关就让门假红——活流被尾剪枝
+        // 摘了 clipIndex，神谕流没人剪）。神谕腿刚整编完、按定义有 pending work，故无条件重放尾剪枝。
+        _oracle.PruneContainedClips();
 
         StreamSnapshot live = Normalize(_live);
         StreamSnapshot full = Normalize(_oracle);

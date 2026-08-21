@@ -1,4 +1,5 @@
 using FairyNext.Backend.Mock;
+using FairyNext.Contracts;
 using FairyNext.Core;
 using FairyNext.Core.Rendering;
 using FairyNext.Numerics;
@@ -45,6 +46,9 @@ public static partial class Program
         // 面板根
         PanelRootLimitsRebuildToItsSubtree();
 
+        // 接线（M1-14b-3：Attach 独占是硬检查）
+        AttachIsExclusivePerKernel();
+
         // P7 五通道端到端
         ContentChannelRewritesInPlace();
         ContentChannelEscalatesOnSegmentKey();
@@ -55,13 +59,24 @@ public static partial class Program
         VisibleChannelEscalatesToStructure();
         StructureChannelRebuildsOnce();
 
+        // P7 原位改写的承重守卫（M1-14b-3：审计探针转正为常设回归）
+        SharedSlotOwnerMoveEscalates();
+        SlackShapeChangeEscalates();
+        ClipCullFlipEscalates();
+
         // P8 提交
         SubmitOrderIsFixed();
         SortingOrderFollowsStructEpochOnly();
         MergedUploadIntervalStaysTight();
+        MergedUploadStaysTightWithinASegment();
 
         // 门
         IncrementalGateGreenAcrossEdits();
+        SlotRidingScrollStaysGreenAcrossFrames();
+        ClippedCorpusKeepsGateGreen();
+        ClipShapeDriftIsCaughtByGate();
+        SpliceBackwardSubtreeMoveHoldsUnderFrameGate();
+        DerivedOracleCatchesAStaleVisualCascade();
         IncrementalGateRedOnDroppedChannel();
         IncrementalGateLocatesContentChannel();
         ColorFieldIsAPureFunctionOfBaseColor();
@@ -188,18 +203,20 @@ public static partial class Program
         }
 
         /// <summary>
-        /// 健全：后端没有协议违约、门七字段全零、派生列神谕全绿。
+        /// 健全：后端没有协议违约、门七字段全零、派生列神谕与序神谕全绿。
         /// 不健全时把三份账直接打出来——门失败要能指认**哪条路径腐烂了**，不是一个 false。
         /// </summary>
         internal bool Sound()
         {
             bool structNow = StreamStructureGate.Check(Table, Stream, out string structErr);
             bool ok = Backend.Violations.Count == 0 && Backend.Gates.Pass && Pipe.DerivedOracleFailures == 0
-                && structNow && StructureGateFailures == 0;
+                && Pipe.PaintOrderFailures == 0 && structNow && StructureGateFailures == 0;
             if (ok) return true;
             Console.WriteLine($"     [unsound] {Backend.Gates.Describe()} derivedFail={Pipe.DerivedOracleFailures}"
-                + $" badNode={Pipe.DerivedBadIndex} violations={Backend.Violations.Count}"
+                + $" badNode={Pipe.DerivedBadIndex} paintOrderFail={Pipe.PaintOrderFailures}"
+                + $" violations={Backend.Violations.Count}"
                 + $" structGateFail={StructureGateFailures + (structNow ? 0 : 1)}");
+            if (Pipe.PaintOrderFailures > 0) Console.WriteLine("     [paint-order] " + Pipe.LastPaintOrderError);
             if (!structNow) Console.WriteLine("     [struct-gate] " + structErr);
             else if (StructureGateFailures > 0) Console.WriteLine("     [struct-gate] " + LastStructureGateError);
             for (int i = 0; i < Backend.Violations.Count && i < 3; i++)
@@ -603,6 +620,44 @@ public static partial class Program
             && r.Pass && f.Sound());
     }
 
+    // ── 接线：Attach 独占 ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// 2026-08 审计修复：Attach 用属性直赋接管四个相位钩子，同一内核挂第二条管线会**静默覆盖**——
+    /// 第一条整帧停摆且其后端每帧 BeginFrame 永不 EndFrame，Debug 也不断言（旧检查只看本实例的
+    /// <c>_attached</c>，跨实例不设防）。现在是无条件硬检查（throw，Release 也拦），Detach 释放后可重接。
+    /// </summary>
+    private static void AttachIsExclusivePerKernel()
+    {
+        var f = new PipeFixture();
+        NodeHandle n = f.Leaf(PipeSolid(0, 0xFF204080u), 0f, 0f, 10f, 10f);
+        f.Tick();
+
+        var backend2 = new MockBackend();
+        var pipe2 = new RenderPipeline(f.Kernel, new RenderStream("pipe-2"), f.Content, backend2);
+        bool threw = false;
+        try { pipe2.Attach(); }
+        catch (InvalidOperationException) { threw = true; }
+
+        // 抢挂被拒后第一条管线不受打扰：编辑照常落字节、门照常绿。
+        f.Table.SetAlpha(n, 0.5f);
+        bool firstIntact = f.TickAndCheck().Pass && f.Stream.Quads[0].Color == 0x80204080u;
+
+        // 同实例重复 Attach 同样必炸（静默 no-op 会骗过「谁在驱动」的判断）。
+        bool rethrew = false;
+        try { f.Pipe.Attach(); }
+        catch (InvalidOperationException) { rethrew = true; }
+
+        // Detach 释放钩子后可重接：换 pipe2 驱动同一棵树，走一帧就有完整帧括号（Begin/End 配平）。
+        f.Pipe.Detach();
+        pipe2.Attach();
+        f.Tick();
+        bool handedOver = backend2.Ticks == 1 && backend2.Violations.Count == 0;
+
+        Check("接线: 第二条管线 Attach 同一内核必炸（硬检查，非 UiAssert），Detach 释放后可重接",
+            threw && firstIntact && rethrew && handedOver && f.Sound());
+    }
+
     // ── P7：五通道端到端 ───────────────────────────────────────────────────
 
     private static void ContentChannelRewritesInPlace()
@@ -771,6 +826,96 @@ public static partial class Program
             && f.Stream.LeafCount == 3 && r.Pass && f.Sound());
     }
 
+    // ── P7：原位改写的承重守卫（2026-08 审计探针转正）───────────────────────
+    //
+    // StreamDrain 原位路径的四道守卫里，审计前只有 SegmentKey 有覆盖：其余三道**逐条删掉全套仍绿**。
+    // 每道守卫挡的都是「原位写出画面对/字节错（或干脆画错）的流」，下面三条各钉一道，全部挂门跑。
+
+    /// <summary>
+    /// SoleUserOfSlot 守卫：旋转容器下两个 local (0,0) 的叶 world 全等 ⇒ 整编 ReuseSlot 共槽。
+    /// 移动持有者时若原位写共享槽，兄弟被连带搬到别人的 world（审计实测：错画且本帧无任何
+    /// rebuild，错画持续）。必须 SlotShape 升级整编，让两叶各分各的槽。
+    /// </summary>
+    private static void SharedSlotOwnerMoveEscalates()
+    {
+        var f = new PipeFixture();
+        NodeHandle spin = f.Box(100f, 100f, 50f, 50f);
+        f.Table.SetRotation(spin, 0.5f);
+        NodeHandle a = f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, spin);
+        NodeHandle b = f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, spin);
+        f.Tick();
+        bool shared = f.Stream.LeafCount == 2
+            && f.Stream.Leaf(0).Slot != SlotTable.IdentitySlot
+            && f.Stream.Leaf(0).Slot == f.Stream.Leaf(1).Slot;
+        int causes = f.Pipe.Drain.CauseCount(EscalateCause.SlotShape);
+
+        f.Table.SetPosition(a, 5f, 5f);              // 动共享槽的持有者
+        IncrementalGateResult r = f.TickAndCheck();
+
+        int la = f.Pipe.Drain.LeafOf(a), lb = f.Pipe.Drain.LeafOf(b);
+        Affine2D ma = f.Stream.Slots.Matrix(f.Stream.Leaf(la).Slot);
+        Affine2D mb = f.Stream.Slots.Matrix(f.Stream.Leaf(lb).Slot);
+        Affine2D wa = f.Table.World(a), wb = f.Table.World(b);
+        Check("P7 守卫 SoleUserOfSlot: 共享槽的持有者移动 ⇒ SlotShape 升级整编，兄弟不被连带搬走",
+            shared && f.Pipe.Drain.CauseCount(EscalateCause.SlotShape) >= causes + 1
+            && la >= 0 && lb >= 0 && f.Stream.Leaf(la).Slot != f.Stream.Leaf(lb).Slot
+            && SameAffine(in ma, in wa) && SameAffine(in mb, in wb)
+            && r.Pass && f.Sound());
+    }
+
+    private static bool SameAffine(in Affine2D a, in Affine2D b) =>
+        a.m00 == b.m00 && a.m01 == b.m01 && a.m10 == b.m10
+        && a.m11 == b.m11 && a.tx == b.tx && a.ty == b.ty;
+
+    /// <summary>
+    /// SlackShape 守卫：slackHint=0 的九宫格 9 → 6 片，预留区形状从 9 变 6。硬写进旧区间会留下
+    /// 3 个归零实例**永久驻留上传**（整编产物里没有它们，逐字节门当场分叉）。
+    /// </summary>
+    private static void SlackShapeChangeEscalates()
+    {
+        var f = new PipeFixture();
+        NodeHandle n = f.Leaf(PipeSliced(1, 4f, slackHint: 0), 0f, 0f, 40f, 40f);
+        f.Leaf(PipeSolid(1), 60f, 0f, 10f, 10f);                     // 邻叶：Start 必须跟着收缩
+        f.Tick();
+        bool nine = f.Stream.Leaf(0).Count == 9 && f.Stream.Leaf(0).Slack == 9
+            && f.Stream.QuadCount == 10 && f.Stream.Leaf(1).Start == 9;
+        int rebuilds = f.Pipe.Extract.Rebuilds;
+
+        f.Table.SetContentRef(n, f.Content.AddLeaf(PipeSliced(1, 0f, slackHint: 0)));   // 左边框 0 ⇒ 6 片
+        IncrementalGateResult r = f.TickAndCheck();
+
+        Check("P7 守卫 SlackShape: 预留区形状变（9→6）⇒ 升级整编，无归零实例驻留、邻叶 Start 收缩",
+            nine && f.Pipe.Drain.CauseCount(EscalateCause.SlackShape) == 1
+            && f.Pipe.Extract.Rebuilds == rebuilds + 1
+            && f.Stream.QuadCount == 7 && f.Stream.Leaf(0).Slack == 6
+            && f.Stream.Leaf(1).Start == 6
+            && r.Pass && f.Sound());
+    }
+
+    /// <summary>
+    /// ClipCull 守卫：OpensClip 域内的叶被挪到整只在域外。硬写会让域外实例留在流里
+    /// （GPU 裁掉了所以「画面对」，但整编产物里没有这个实例——字节错，且上传白花）。
+    /// </summary>
+    private static void ClipCullFlipEscalates()
+    {
+        var f = new PipeFixture();
+        NodeHandle window = f.Box(0f, 0f, 60f, 60f);
+        f.Table.SetContentRef(window, f.Content.Add(ExClipBox()));
+        f.Leaf(PipeSolid(1), 40f, 40f, 30f, 30f, window);            // 压边留在流里
+        NodeHandle wander = f.Leaf(PipeSolid(1), 30f, 5f, 40f, 20f, window);
+        f.Tick();
+        bool two = f.Stream.LeafCount == 2;
+        int causes = f.Pipe.Drain.CauseCount(EscalateCause.ClipCull);
+
+        f.Table.SetPosition(wander, 200f, 200f);                     // 整只挪出域
+        IncrementalGateResult r = f.TickAndCheck();
+
+        Check("P7 守卫 ClipCull: 域外剔除结论翻转 ⇒ 升级整编（域外实例出流，2 叶 → 1 叶）",
+            two && f.Pipe.Drain.CauseCount(EscalateCause.ClipCull) >= causes + 1
+            && f.Stream.LeafCount == 1
+            && r.Pass && f.Sound());
+    }
+
     // ── P8：提交 ───────────────────────────────────────────────────────────
 
     private static void SubmitOrderIsFixed()
@@ -851,6 +996,32 @@ public static partial class Program
             && f.Sound());
     }
 
+    /// <summary>
+    /// 2026-08 审计：MergedUploadIntervalStaysTight 的夹具是三段各 1 quad——「整段上传」与
+    /// 「贴脏点上传」在 1-quad 段上不可区分（审计实测：改成整段上传全套仍绿，6-quad 段放大 6×）。
+    /// 本用例用 6-quad 单段钉住**段内**紧致：单点脏只上传 1 实例、字节数 = 1 × 实例大小。
+    /// </summary>
+    private static void MergedUploadStaysTightWithinASegment()
+    {
+        var f = new PipeFixture();
+        var leaves = new NodeHandle[6];
+        for (int i = 0; i < 6; i++) leaves[i] = f.Leaf(PipeSolid(1), i * 20f, 0f, 10f, 10f);
+        f.Tick();
+        bool one = f.Stream.SegmentCount == 1 && f.Stream.QuadCount == 6;
+
+        f.Backend.ClearLog();
+        f.Table.SetAlpha(leaves[2], 0.5f);           // 段中间的单点脏
+        IncrementalGateResult r = f.TickAndCheck();
+
+        MockCall upload = f.Backend.LastCall(MockCallKind.UploadInstances);
+        Check("P8 合并区间: 6-quad 单段的单点脏贴点上传（1 实例、80B，不整段重发）",
+            one && f.Backend.CallCount(MockCallKind.UploadInstances) == 1
+            && upload.First == 2 && upload.Count == 1
+            && f.Pipe.LastReport.Quads == 1
+            && f.Pipe.LastStats.UploadBytes == Abi.QuadInstanceSize
+            && r.Pass && f.Sound());
+    }
+
     // ── 门：增量正确性 ─────────────────────────────────────────────────────
 
     private static void IncrementalGateGreenAcrossEdits()
@@ -884,6 +1055,146 @@ public static partial class Program
             edit();
             return f.TickAndCheck().Pass;
         }
+    }
+
+    /// <summary>
+    /// 门的正例补失地①（2026-08 审计）：全套里 Transform 骑槽写只被进入 1 次、门正例从不走它——
+    /// 「滚动 = 写一个矩阵槽」的旗舰承诺在门正例里零覆盖。旋转叶连续多帧移动：每帧一次真槽写
+    /// （SlotWrites 逐帧 +1，不是整编替它擦掉）、零整编、门逐帧绿。
+    /// </summary>
+    private static void SlotRidingScrollStaysGreenAcrossFrames()
+    {
+        var f = new PipeFixture();
+        NodeHandle n = f.Leaf(PipeSolid(1), 5f, 5f, 10f, 10f);
+        f.Table.SetRotation(n, 0.4f);
+        bool ok = f.TickAndCheck().Pass;
+        int rebuilds = f.Pipe.Extract.Rebuilds;
+        int writes = f.Pipe.Drain.SlotWrites;
+        int slot = (int)f.Stream.Quads[0].SlotIndex;
+
+        for (int i = 1; i <= 4; i++)
+        {
+            f.Table.SetPosition(n, 5f + i * 10f, 5f);
+            ok &= f.TickAndCheck().Pass;
+            ok &= f.Pipe.Drain.SlotWrites == writes + i;          // 真走了槽写路径
+        }
+        Affine2D m = f.Stream.Slots.Matrix(slot);
+        Affine2D w = f.Table.World(n);
+        Check("门 · 正例（骑槽滚动）: 旋转叶连续 4 帧移动=每帧一次槽写、零整编、门逐帧绿",
+            ok && slot != SlotTable.IdentitySlot
+            && f.Pipe.Extract.Rebuilds == rebuilds
+            && SameAffine(in m, in w) && f.Sound());
+    }
+
+    /// <summary>
+    /// 门的正例补失地②（2026-08 审计）：门的语料里没有裁剪域——规范形的 clip 字段整条删掉全套仍绿。
+    /// OpensClip 域 + 域内叶的增量改写（Transform 原位重写 / Color / 剪枝重判）逐帧过门；
+    /// 剪枝的**单一落点**（P7 尾）在此顺带验收：Extract.PruneAfterRebuild 默认关、门下必须绿
+    /// （审计：从前神谕腿镜像开关而非镜像管线，这个形状是假红）。
+    /// </summary>
+    private static void ClippedCorpusKeepsGateGreen()
+    {
+        var f = new PipeFixture();
+        NodeHandle window = f.Box(0f, 0f, 60f, 60f);
+        f.Table.SetContentRef(window, f.Content.Add(ExClipBox()));
+        NodeHandle inner = f.Leaf(PipeSolid(1), 5f, 5f, 10f, 10f, window);   // 整只在内 ⇒ 尾剪枝摘 clipIndex
+        NodeHandle edge = f.Leaf(PipeSolid(1), 50f, 50f, 20f, 20f, window);  // 压边 ⇒ clip 采样保留
+        NodeHandle spun = f.Leaf(PipeSolid(1), 20f, 20f, 10f, 10f, window);
+        f.Table.SetRotation(spun, 0.5f);                                     // 骑槽 ⇒ 跨帧不剪不剔
+
+        bool ok = f.TickAndCheck().Pass;
+        ok &= Step(() => f.Table.SetPosition(edge, 45f, 45f));   // 裁剪内叶原位重写（仍压边）
+        ok &= Step(() => f.Table.SetAlpha(edge, 0.5f));          // Color
+        ok &= Step(() => f.Table.SetPosition(inner, 8f, 8f));    // 仍整只在内 ⇒ 重写后尾剪枝重新摘
+
+        int li = f.Pipe.Drain.LeafOf(inner), le = f.Pipe.Drain.LeafOf(edge), ls = f.Pipe.Drain.LeafOf(spun);
+        bool routes = li >= 0 && le >= 0 && ls >= 0
+            && f.Stream.Quads[f.Stream.Leaf(li).Start].ClipIndex == 0u
+            && f.Stream.Quads[f.Stream.Leaf(le).Start].ClipIndex != 0u
+            && f.Stream.Quads[f.Stream.Leaf(ls).Start].ClipIndex != 0u;
+
+        Check("门 · 正例（裁剪域）: OpensClip 语料 + 域内增量改写逐帧绿；剪枝单一落点（P6 开关默认关）门下不假红",
+            ok && routes && !f.Pipe.Extract.PruneAfterRebuild && f.Sound());
+
+        bool Step(Action edit)
+        {
+            edit();
+            return f.TickAndCheck().Pass;
+        }
+    }
+
+    /// <summary>
+    /// 裁剪语料的负例（杀「删规范形 clip 字段」的变异）：吞掉 Content 排水后换窗口的软边——
+    /// 几何与 quad 逐字节不变，**唯一**的差异在 clip 条目的 soft 字段。规范形若不带 clip 字段，
+    /// 这个漏标永远抓不到；门必须红并定位到 Clips.soft。
+    /// </summary>
+    private static void ClipShapeDriftIsCaughtByGate()
+    {
+        var f = new PipeFixture();
+        NodeHandle window = f.Box(0f, 0f, 60f, 60f);
+        f.Table.SetContentRef(window, f.Content.Add(ExClipBox()));
+        f.Leaf(PipeSolid(1), 50f, 50f, 20f, 20f, window);            // 压边：clip 条目保持被引用
+        f.Tick();
+        bool green = f.Gate.Check().Pass;
+
+        f.Inval.Unregister(f.Pipe.Drain);
+        f.Inval.Register(new DropChannel(f.Pipe.Drain, Ch.Content));
+        f.Table.SetContentRef(window, f.Content.Add(ExClipBox(new Vector2(4f, 4f))));   // 换软边
+        f.Tick();
+        IncrementalGateResult red = f.Gate.Check();
+
+        Check($"门 · 增量正确性: 裁剪域形状漂移 ⇒ 门红并定位到 Clips.soft {red.Describe()}",
+            green && !red.Pass
+            && red.Site.Section == CanonicalSection.Clips && red.Site.Field == "soft");
+    }
+
+    /// <summary>
+    /// 帧级序神谕的正例兼「边清边拼」变异的杀手（2026-08 审计：ValidatePaintOrder 从未逐帧跑过）。
+    /// 子树从**后面的切片**搬进**前面的展开区**——切片拼接若不「清扫整体先于拼接」，
+    /// 目的地展开先写好的新 paintIndex 会被源切片的清扫抹成哨兵：定向拼接用例（前→后搬）撞不到，
+    /// 只有帧尾的序神谕（DerivedOracle 开着时随帧跑）与流结构门抓得住。
+    /// </summary>
+    private static void SpliceBackwardSubtreeMoveHoldsUnderFrameGate()
+    {
+        var f = new PipeFixture();
+        for (int i = 0; i < 8; i++) f.Leaf(PipeSolid(1), i * 12f, 40f, 10f, 10f);   // 撑大树，脏比例落在切片阈值内
+        NodeHandle boxA = f.Box(0f, 0f, 50f, 50f);
+        f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, boxA);
+        NodeHandle boxB = f.Box(100f, 0f, 50f, 50f);
+        NodeHandle b1 = f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, boxB);
+        f.Tick();
+        int splices = f.Table.PaintSplices;
+
+        f.Table.AddChild(boxA, b1);          // 后切片子树前移
+        IncrementalGateResult r = f.TickAndCheck();
+
+        Check("P6 切片拼接(帧级): 后切片子树前移走切片路径，帧尾序神谕与结构门都绿（清扫整体先于拼接）",
+            f.Table.PaintSplices == splices + 1
+            && f.Table.PaintIndexOf(b1) != NodeTable.NotInTree
+            && f.Stream.LeafCount == 10
+            && r.Pass && f.Pipe.PaintOrderFailures == 0 && f.Sound());
+    }
+
+    /// <summary>
+    /// 派生列神谕 worldVisual 半边的专属负例（2026-08 审计：把 visual 比对整行关掉全套仍绿）。
+    /// 摘钩子后写容器 α——world 列一位都不动，唯一的差异在 worldVisual 级联；
+    /// 与 <see cref="DerivedOracleCatchesAMissingMark"/>（world 半边）成对。
+    /// </summary>
+    private static void DerivedOracleCatchesAStaleVisualCascade()
+    {
+        var f = new PipeFixture();
+        NodeHandle box = f.Box(10f, 10f, 50f, 50f);
+        f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, box);
+        f.Tick();
+        bool cleanFirst = f.Pipe.DerivedOracleFailures == 0;
+
+        f.Inval.Detach();
+        f.Table.SetAlpha(box, 0.5f);
+        f.Tick();
+
+        Check("P6 派生列: 神谕的 worldVisual 半边抓住 α 级联漏标（world 全等、visual 陈旧 ⇒ 红并指名节点）",
+            cleanFirst && f.Pipe.DerivedOracleFailures == 1
+            && f.Pipe.DerivedBadIndex == box.Index);
     }
 
     private static void IncrementalGateRedOnDroppedChannel()
@@ -956,15 +1267,21 @@ public static partial class Program
         f.Tick();                               // 首帧：建流 + 整编 + 全量上传
         ulong presentsAfterFirst = f.Backend.Presents;
         ulong ticksAfterFirst = f.Backend.Ticks;
+        ulong pipePresentsAfterFirst = f.Pipe.Presents;
 
-        for (int i = 0; i < 5; i++) f.Tick();    // 静止 5 帧
+        // 静止 5 帧**串着增量门**跑（2026-08 审计：本用例此前不过门，管线侧的 Presents 也无人断言——
+        // 「静止帧偷偷重画」只要 mock 侧 stats.Dirty 还是 false 就抓不到）。
+        bool idleGreen = true;
+        for (int i = 0; i < 5; i++) idleGreen &= f.TickAndCheck().Pass;
 
-        Check("门 · 零脏帧空转收据: 静止帧七条队列全零、后端零 draw、ticks 与 presents 分账 " +
+        Check("门 · 零脏帧空转收据: 静止帧七条队列全零、后端零 draw、两侧 ticks/presents 分账、门下仍绿 " +
               f.Pipe.DescribeReceipt(),
-            f.AllQueuesEmpty()
+            idleGreen && f.AllQueuesEmpty()
             && f.Backend.Ticks == ticksAfterFirst + 5
             && f.Backend.Presents == presentsAfterFirst
-            && f.Pipe.IdleFrames == 5 && f.Pipe.Ticks == 6
+            && f.Pipe.Ticks == 6 && f.Pipe.Presents == pipePresentsAfterFirst
+            && f.Pipe.Presents == 1                             // 首帧画了一次，此后一次都不许多
+            && f.Pipe.IdleFrames == 5
             && f.Pipe.LastReport.IsIdle && !f.Pipe.LastStats.Dirty
             && f.Backend.CallCount(MockCallKind.DrawStream) == 1
             && f.Sound());

@@ -253,8 +253,14 @@ public sealed class Extract : IChannelDrain
     /// </summary>
     public NodeHandle PanelRoot { get; set; }
 
-    /// <summary>重编后顺手跑一遍 inner rect 包含剪枝（不变量 7）。默认开。</summary>
-    public bool PruneAfterRebuild { get; set; } = true;
+    /// <summary>
+    /// 重编后顺手跑一遍 inner rect 包含剪枝（不变量 7）。**默认关**（2026-08 审计裁决：
+    /// 剪枝的落点统一在 P7 收尾——quad 在 P7 才写完，这里剪是拿上一帧几何下结论，
+    /// 且结构帧会跑两遍、第二遍恒剪 0 条纯空扫）。只留给**不过管线**的离线路径
+    /// （FgbCompiler = 无头运行时）显式打开；管线路径的剪枝见 <c>RenderPipeline.DrainTail</c>，
+    /// 增量门的神谕腿镜像的也是那道尾剪枝而不是本开关。
+    /// </summary>
+    public bool PruneAfterRebuild { get; set; }
 
     /// <summary>累计重编次数（诊断：结构脏的真实频次，作用域重编立项的证据之一）。</summary>
     public int Rebuilds { get; private set; }

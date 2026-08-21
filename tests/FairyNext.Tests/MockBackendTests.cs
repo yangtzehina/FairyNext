@@ -44,6 +44,7 @@ public static partial class Program
         ReservedBitsMustBeZero();
         ZeroDirtyFrameSkipsPresent();
         ZeroDirtyFrameWithUploadsIsLoud();
+        FrameIdMismatchIsLoud();
 
         // GateReport 七字段
         GateReportPassIsAllZero();
@@ -540,6 +541,28 @@ public static partial class Program
         b.UploadInstances(s, 0, new[] { Quad(0f, 0f, 1f, 1f, Rgba(1, 1, 1, 255)) });
         Quiet(() => b.EndFrame(new FrameStats { FrameId = 1, Dirty = false }));
         Check("不变量 13: Dirty=false 却发生上传 → 违约", b.Violations.Count == 1);
+    }
+
+    /// <summary>
+    /// 2026-08 审计：stats.FrameId 从前无人校验——BuildStats 拿错帧的账（收据、零脏帧短路、
+    /// 逐帧哈希全记到别的帧上）后端照收。现在 EndFrame 与 BeginFrame 对表：错帧 = 违约进
+    /// Violations（release 照记），对帧静默，0 = 未接帧号的裸调用放行。
+    /// </summary>
+    private static void FrameIdMismatchIsLoud()
+    {
+        var b = new MockBackend();
+        StreamHandle s = b.CreateStream(StreamDesc.ForQuads(2));
+        b.BeginFrame(5);
+        b.UploadInstances(s, 0, new[] { Quad(0f, 0f, 1f, 1f, Rgba(1, 2, 3, 255)) });
+        Quiet(() => b.EndFrame(new FrameStats { FrameId = 7, Dirty = true, QuadCount = 1 }));
+        bool caught = b.Violations.Count == 1 && b.Violations[0].Contains("FrameId");
+
+        b.BeginFrame(6);
+        b.UploadInstances(s, 0, new[] { Quad(0f, 0f, 1f, 1f, Rgba(1, 2, 3, 255)) });
+        FrameReceipt r = b.EndFrame(new FrameStats { FrameId = 6, Dirty = true, QuadCount = 1 });
+
+        Check("契约: EndFrame 的 stats.FrameId 与 BeginFrame 对表（错帧违约、对帧静默）",
+            caught && b.Violations.Count == 1 && r.FrameId == 6);
     }
 
     // ── GateReport 七字段 ───────────────────────────────────────────────────
