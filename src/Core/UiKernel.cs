@@ -193,6 +193,14 @@ public sealed class UiKernel
     public PhaseHook? StateStep { get; set; }
 
     /// <summary>
+    /// P5 布局求解（M1-16 的 LayoutEngine.Step）：在 Text 与 Layout 两条排水**之后**、P6 之前。
+    /// 为什么排水之外还要一个钩子：约束的脏传播由 <b>src</b> 的移动触发（Ch.Transform），而那条
+    /// 队列的消费权归 P7——布局只能窥视，于是「Transform 脏但 Layout 队列为空」的帧也必须进求解；
+    /// 排水回调只在队列非空时发生，承载不了这条路径。占用检查在 LayoutEngine.Attach（硬独占）。
+    /// </summary>
+    public PhaseHook? LayoutStep { get; set; }
+
+    /// <summary>
     /// P6 派生列重算（world / worldVisual）。未装时内核调 <see cref="NodeTable.DrainDerivedFull"/> 全量版；
     /// M1-14 装上增量版后，全量版留作增量正确性门的神谕。
     /// </summary>
@@ -406,11 +414,16 @@ public sealed class UiKernel
         return n;
     }
 
-    /// <summary>P5：度量（Text 通道）先于布局（Layout 通道）——三级惰性的第一级在这里落地。</summary>
+    /// <summary>
+    /// P5：度量（Text 通道）先于布局（Layout 通道）——三级惰性的第一级在这里落地；
+    /// 随后 <see cref="LayoutStep"/> 跑四层求解 + 受控窗兜底（M1-16 接管，未装时两条队列照排，
+    /// Layout 的消费者仍是排水器自己）。
+    /// </summary>
     private void P5Layout(ref FrameContext ctx)
     {
         _live.DrainedHandles += _invalidation.DrainChannel(ref ctx, Ch.Text);
         _live.DrainedHandles += _invalidation.DrainChannel(ref ctx, Ch.Layout);
+        LayoutStep?.Invoke(ref ctx);
     }
 
     /// <summary>P6：paintOrder 定形 → 派生列一遍算 → 向下通道按子树戳下钻。</summary>

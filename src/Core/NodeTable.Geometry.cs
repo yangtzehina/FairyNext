@@ -291,22 +291,25 @@ public sealed partial class NodeTable
     /// <summary>
     /// 布局在 P5 的独占写口（不变量 2）：来源必须是 Layout、相位必须是 P5、
     /// 且节点必须持有 resolved 槽——无槽节点的 resolved 就是 authored，写它等于篡改逻辑真值。
+    /// gear/transition/tween 在类型上没有到达这里的路径（它们只碰 authored，全局裁决）。
     /// </summary>
-    public void SetResolved(NodeHandle h, float x, float y, float w, float hh, WriteSource src)
+    /// <returns>值真的变了返回 true（= 已派生 Mark；M1-16 的幂等门按此计零变化）。</returns>
+    public bool SetResolved(NodeHandle h, float x, float y, float w, float hh, WriteSource src)
     {
-        if (!TryResolve(h, out uint i)) { UiAssert.That(false, "SetResolved 于失效句柄"); return; }
+        if (!TryResolve(h, out uint i)) { UiAssert.That(false, "SetResolved 于失效句柄"); return false; }
         UiAssert.That(src == WriteSource.Layout, "resolved 唯一写者门：src 必须为 Layout（不变量 2）");
         UiAssert.That(Phase == FramePhase.P5_Layout, "resolved 唯一写者门：仅 P5 可写（不变量 2）");
         uint r = _resolvedRef[i];
         UiAssert.That(r != 0, "resolved 写到无槽节点（不变量 7：写目标必须在编译期布局写集内）");
-        if (r == 0) return;
+        if (r == 0) return false;
 
         ref ResolvedGeom g = ref _resolvedPool[r];
         bool moved = !BitEquals.Eq(g.X, x) || !BitEquals.Eq(g.Y, y);
         bool sized = !BitEquals.Eq(g.W, w) || !BitEquals.Eq(g.H, hh);
-        if (!moved && !sized) return;               // 等值切断同样管布局出口（机制④）
+        if (!moved && !sized) return false;         // 等值切断同样管布局出口（机制④）
         g.X = x; g.Y = y; g.W = w; g.H = hh;
         Mark(i, moved && sized ? Ch.Transform | Ch.Content : moved ? Ch.Transform : Ch.Content, src);
+        return true;
     }
 
     /// <summary>
@@ -318,6 +321,15 @@ public sealed partial class NodeTable
         if (!TryResolve(h, out uint i)) return default;
         ReadResolvedCore(i, out float x, out float y, out float w, out float hh);
         return new ResolvedGeom { X = x, Y = y, W = w, H = hh };
+    }
+
+    /// <summary>
+    /// authored 几何的下标读（布局平面 M1-16：offset 捕获读 authored dst 边、
+    /// 差分神谕全量腿以 authored 为初值、有槽节点的非布局分量刷新——三处共用，只读）。
+    /// </summary>
+    internal void AuthoredAt(uint index, out float x, out float y, out float w, out float h)
+    {
+        x = _posX[index]; y = _posY[index]; w = _width[index]; h = _height[index];
     }
 
     private void ReadResolvedCore(uint i, out float x, out float y, out float w, out float h)

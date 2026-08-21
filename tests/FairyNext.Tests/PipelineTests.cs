@@ -1,6 +1,7 @@
 using FairyNext.Backend.Mock;
 using FairyNext.Contracts;
 using FairyNext.Core;
+using FairyNext.Core.Layout;
 using FairyNext.Core.Rendering;
 using FairyNext.Numerics;
 
@@ -88,23 +89,6 @@ public static partial class Program
     // ── 夹具 ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// M1-16 之前的布局占位。Layout 通道**必须有消费者**：没有消费者的通道不排水（明文纪律），
-    /// 脏位永不清、队列跨帧留存，零脏帧就永远到不了。真实布局器在 P5 解出 rect 后经内部写口回写
-    /// 并派生 Mark(Content|Transform, reason=LayoutDerived)；本占位不解 rect（authored 就是真值），
-    /// 只补那次派生 Mark——少了它，「改宽高」这条路径在 P6 与 P7 都无人认领。
-    /// </summary>
-    private sealed class LayoutStub : IChannelDrain
-    {
-        public Ch Consumes => Ch.Layout;
-
-        public void Drain(ref FrameContext ctx, Ch channel, ReadOnlySpan<NodeHandle> queue)
-        {
-            for (int i = 0; i < queue.Length; i++)
-                ctx.Invalidation.Mark(queue[i], Ch.Content | Ch.Transform, InvalidateReason.LayoutDerived);
-        }
-    }
-
-    /// <summary>
     /// 负例开关：**吞掉一条通道的排水**，其余原样转交。用来在测试内制造一次「漏标」——
     /// 产品代码一行不改，增量正确性门必须当场变红并指认是哪条通道。
     /// </summary>
@@ -139,13 +123,17 @@ public static partial class Program
         internal readonly MockBackend Backend = new MockBackend();
         internal readonly RenderPipeline Pipe;
         internal readonly IncrementalGate Gate;
+        internal readonly LayoutEngine Layout;
         private FrameTime _time = FrameTime.First(0.016f, 0.016f);
 
         internal PipeFixture()
         {
             Inval = new Invalidation(Table);
             Kernel = new UiKernel(Table, Inval);
-            Inval.Register(new LayoutStub());
+            // M1-16：真实布局器接管 M1-14 LayoutStub 的接缝。无槽节点（本夹具全部）它做的事
+            // 与占位完全相同——补 Mark(Content|Transform, LayoutDerived)；幂等门帧级随行。
+            Layout = new LayoutEngine(Kernel) { IdempotenceGate = true };
+            Layout.Attach();
             Pipe = new RenderPipeline(Kernel, Stream, Content, Backend) { DerivedOracle = true };
             Pipe.Attach();
             Gate = new IncrementalGate(Pipe);
@@ -211,13 +199,15 @@ public static partial class Program
         {
             bool structNow = StreamStructureGate.Check(Table, Stream, out string structErr);
             bool ok = Backend.Violations.Count == 0 && Backend.Gates.Pass && Pipe.DerivedOracleFailures == 0
-                && Pipe.PaintOrderFailures == 0 && structNow && StructureGateFailures == 0;
+                && Pipe.PaintOrderFailures == 0 && structNow && StructureGateFailures == 0
+                && Layout.Stats.IdempotenceFailures == 0;
             if (ok) return true;
             Console.WriteLine($"     [unsound] {Backend.Gates.Describe()} derivedFail={Pipe.DerivedOracleFailures}"
                 + $" badNode={Pipe.DerivedBadIndex} paintOrderFail={Pipe.PaintOrderFailures}"
                 + $" violations={Backend.Violations.Count}"
                 + $" structGateFail={StructureGateFailures + (structNow ? 0 : 1)}");
             if (Pipe.PaintOrderFailures > 0) Console.WriteLine("     [paint-order] " + Pipe.LastPaintOrderError);
+            if (Layout.Stats.IdempotenceFailures > 0) Console.WriteLine("     [layout-gate] " + Layout.Stats.LastGateError);
             if (!structNow) Console.WriteLine("     [struct-gate] " + structErr);
             else if (StructureGateFailures > 0) Console.WriteLine("     [struct-gate] " + LastStructureGateError);
             for (int i = 0; i < Backend.Violations.Count && i < 3; i++)

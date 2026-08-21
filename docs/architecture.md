@@ -359,6 +359,8 @@ tween 与时间轴的推进**不在本平面**——它们归状态层，在 P4 
 
 **9. P5 布局排水：单遍、受控窗、幂等。** 四层串行：度量（`TextEngine.Measure` 只量不出网格）→ 包围 → 约束图按编译期定死的拓扑序单遍求解 → 流式布局；P5 是 resolved 列的唯一写者。随后的受控回调窗承接虚拟列表铺设与滚动补偿，规则是**不变式快路径**：回调满足「只写本次排水尚未访问的子树」者，realize 直接内联进单遍——固定物理节点集的虚拟列表天然满足；违例才落兜底路径：≤3 轮有界微排水，超限延帧 + 警告。两条机器可验的幂等约束压住一切漂移：同 authored + 同约束图连跑两次 P5 必须 bit-identical；debug 构建断言 P5 内禁读上帧 resolved（滚动补偿窗除外）。为什么：交错 build/layout 的合法性论证来自 Flutter——沿树序只向未访问子树注入工作即保单遍收敛；禁读上帧输出是 LayoutNG 治 hysteresis 的教训——布局读自己上帧的解会形成不动点漂移，规则必须升为断言而非评审意见。
 
+> **P5 有三个动作：两条排水 + 一个求解钩子（M1-16 实现期补充）。** 相位表的「P5 排 Text 与 Layout」落地后不完整：约束的脏传播由 **src** 的移动触发，而那是 Ch.Transform 的条目、消费权归 P7——布局只能窥视，排水回调「队列非空才被调用」的触发语义承载不了这条路径。于是 P5 = `Drain(Text)` → `Drain(Layout)` → `LayoutStep` 钩子（M1-16 的布局引擎挂此，占用硬独占）。钩子为空时两条队列照排、行为与 M1-14 期一致。接线细则与依赖前提见平面四 A 机制 9 的同名回写。
+
 **10. 重入契约（逐相位明文）。** P0–P3 自由改状态：没有任何排水在进行，Mark 是 O(1) 幂等的。P4：波次 + Binder 四件套收敛，上限内同帧、超限延帧可诊断；Resolve 不跑用户代码。P5：仅受控窗，副作用由快路径或 ≤3 轮兜底收束。P6 纯内部，禁。**P7/P8 禁改**：debug 构建 setter 检测 `CurrentPhase >= RenderDrain` 即断言；release 下 Mark 照记但入下帧队列——不丢、只延迟。P9 仅钩子。为什么：旧架构「onUpdate 里改属性碰巧能用」是未定义行为，能用与否取决于改动撞上遍历的哪一段；分相位明文 + 断言把它变成可测试契约，release 的降级路径保证违约代码也不丢失写入。
 
 > **「入下帧队列」的实现形态 = 排水水位冻结（M1-08 实现期补充）。** M1-07 曾指望队列双缓冲天然实现这条降级，落地后不成立：双缓冲只挡住**同一通道**排水期间的再 Mark，而 P7 要按 content→transform→color→visible→structure 顺序排五条通道——content 排水器写出的 transform 失效会在同帧后半段被消化，「P7 里改属性碰巧能用」这个旧世界的未定义行为原样复活。正确形态是**进 P7 时冻结每条通道的可排水位**（`Invalidation.FreezeForRenderDrain()`），水位以上的条目在排水时原样退回入队缓冲、脏位不清，P9 解冻后下一帧照排。于是「不丢、只延迟」对**用户违约写与排水器之间的连锁**同时成立；违例次数与被顺延条数进诊断面（`phaseViolations` / `deferredMarks`），不变量 9 从断言升级为可计量。
@@ -675,6 +677,8 @@ struct ConstraintState {          // per-instance，单块分配
 
 **约束图全烘焙，运行时不提供 AddRelation**——插入会打乱「索引=拓扑序」的不变量，而编辑器资产也不产出运行时约束。
 
+> **求值形态四则（M1-16 实现期补充）。** ① **percent 的锚点恒为 src 起点**：求值不读 srcEdge 位，`dst.edge = src.Min + ratio × src.Size`（Size 形态 `dstSize = ratio × srcSize`）——fork RelationItem 对 Left_Left/Left_Center/Left_Right 的 percent 分支是同一条 `xMin = pos + (xMin − pos) × delta`，展开后正是「相对 target 起点的比例保持」，Width percent 的 `width = target.width + v×delta` 与 ratio 保持代数等价；捕获时 src 尺寸为零 → ratio=0、求值塌到锚点（fork 同判）。② **Pin 存捕获常量**而非「保持现值」：fork 的 Ext 关系靠事件驱动下的现值保持对边，多写者下会漂移；这里 Pin 与 Follow 一样在建立/重捕获时从 authored 取值，重算永远从捕获值出发——「用户写 authored 即重捕获」对三种算子形态因此是同一条规则。③ **pivotCorrect 是保留位**：位布局占住（打包往返有测试）、修正系数与置位入口都归 M1-20 的 pivotAsAnchor 消灭——builder 不提供置位入口，位存在而无人能置，语义落地前不会有静默错值。④ **布防初解全量入队**：offset/ratio 捕获后立刻把全部算子解一遍，把 percent 等式归一到求值形态——`(e−min)/size×size+min` 在 float 上不等于 `e`，authored 原值不是求值函数的不动点，不归一则 P5 幂等断言在布防帧就是假红。
+
 #### 滚动与虚拟列表
 
 ```csharp
@@ -735,9 +739,13 @@ struct VirtualList {
 
 **9）24 种关系 → EdgeFollow 单算子，编译期拓扑序单遍求值。** setter 写 authored 时查 FanOut 把受影响 op 位或进 dirtyOps；若节点自身有被绑定边且 WriteSource∈{User,Gear,Transition}，重捕获 offset。P5 约束层按索引序（=拓扑序）遍历置位 op，纯函数求值 `dst.resolvedEdge = src.resolvedEdge + offset`（或 ×ratio，pivot 修正常量），写 resolved 并经 FanOut 置位更高索引 op——拓扑序保证只向前，单遍收敛。求值写 WriteSource==Layout 不触发重捕获，回环在类型上不可能。为什么：旧 RelationItem 靠事件订阅 + `_targetData` 缓存 delta，有级联风暴与 delta 浮点累积漂移；每次从 resolved 现值重算则漂移消失。
 
+> **「setter 写 authored 时查 FanOut」的落地形态 = 队列观察，不是 setter 内联（M1-16 实现期补充）。** 布局不在 setter 里挂钩：authored 写的事实经失效协议的队列到达——**Ch.Layout 消费**（宽高；无 resolved 槽的节点在此补派生 `Mark(Content|Transform, LayoutDerived)`，即 M1-14 LayoutStub 的全部语义，接缝原样接管）、**Ch.Transform 窥视**（位置；消费权归 P7，与 P6 脏根同一读法）。窥视承载不了排水回调的触发语义——队列为空排水器不被调用，而「只有 src 动、Layout 队列为空」的帧照样要重解——于是内核 P5 多一个 `LayoutStep` 钩子（两条排水之后、P6 之前；占用 = 硬独占，M1-14b Attach 同款）。重捕获判据由此简化：布局从不写 authored，队列里看到的 authored 写**恒属** {User,Gear,Transition}，无需 reason 辨源。代价是一条依赖前提：**P7 必须有 Transform 消费者**——否则布局自己的 LayoutDerived 派生标记跨帧滞留在队列里，下一帧被误读成用户写、触发错误重捕获（布局单跑的测试要装吸收排水器）。
+
 **10）四层排水与分层拒环。** P5 四层严格串行：**度量**（文本 Measure，只量不出网格，三级惰性）→ **包围**（boundsDirty 按树序逆序自底向上重算）→ **约束**（上条）→ **流式**（LinearLayout 算子：行列/流式/分页，覆盖编辑器资产 90% 诉求；不做完整 flexbox——编辑器永不产出 flex，grow/shrink 两遍协商还破坏单遍拓扑求值）。断环规则两条，全在编译期：① 环检测作用于**分层后的图**，层内环拒绝（CycleRejected 带环路径），层间表观环靠分层断开——按裸节点图拒环会误杀大量合法版式；② 「绑父轴不计包围」：在内容决定尺寸的轴上，绑定到父该轴的子节点不计入包围（CSS 绝对定位不撑父的同构规则），把「尺寸依赖内容、内容依赖布局」的环静态断掉，语义差异发迁移警告。另设 **parentUsesSize 位**：流式容器声明是否读子尺寸（固定行高列表=false），false 则子 content/measure 脏不向父上溯——layout 通道的上溯剪断条件。为什么：旧 EnsureBoundsCorrect 靠求值顺序巧合收敛，行为不可静态解释；parentUsesSize 是 Flutter relayout boundary 的推导式移植，约束图靠拓扑序天然免疫、此位补流式层。
 
 **11）P5 受控回调窗与不变式快路径。** 四层之后开受控窗：虚拟列表铺设、滚动补偿。回调满足「只写本次排水尚未访问的子树」不变式者，realize 内联进单遍（固定物理节点集天然满足；Flutter 交错 build/layout 的合法性论证移植）；不满足者走 ≤3 轮有界微排水兜底，违例 debug 断言、超限计入诊断。**P5 幂等**：同 authored + 同约束图连跑两次必须 bit-identical；debug 构建断言 P5 内禁读上帧 resolved（滚动补偿窗除外）。为什么：LayoutNG 治 hysteresis 的核心教训就是布局读上帧结果会造成不可收敛抖动，把规则升为机器可验。
+
+> **兜底轮的第一个真实客户是 parentUsesSize 反向依赖（M1-16 实现期补充）。** 落地轮次形态：主四层一遍 + ≤`Abi.LayoutMicroDrainLimit`(=3) 兜底轮，每轮同序**包围（parentUsesSize 容器按树深自底向上）→ 约束 → 流式**。「子定父尺寸、父 again 定子」的链每跨一级要一轮层间交替（包围写的尺寸喂下一轮的约束），受控窗回调（M2 的虚拟列表）尚未进驻时，兜底轮已经在给这条链收敛。超限的语义钉死为**有声 + 不丢**：计数（`MicroDrainOverflows`）+ 告警描述 + 余活（脏位/容器旗）原样留到下一帧 P5 续排——不是死循环也不是静默截断；布局差分神谕在此类帧按契约跳过（增量腿把活留给下帧，两腿此刻不可比），且跳过本身有账（`LastDifferentialSkipped`）。**幂等断言的实现形态**：收敛帧末把全部算子/容器全量重解一遍、数 resolved 变化（`SetResolved` 为此返回「值真的变了」），非零即失败并指名首个节点——它把「求值必须是 (authored, 约束图, offsets) 的纯函数」从评审意见升为帧级机器执法；其成立前提是机制 9 补充里的「布防初解全量入队」。两道门的负例（增量腿漏一条依赖 / 不收敛写）走测试侧内部开关，产品路径恒中性。
 
 **12）滚动：logical/visual 双坐标显式状态机。** logical 是 API 读写值恒 clamp；visual 是动画中间值，写槽前取整对齐像素。P0 拖拽：visual 直写（越界 0.5 阻尼 + PULL_RATIO 上限），velocity=Lerp(v, Δp/Δt, Δt·10)；松手按 1136 基准换算 + log 解析时长 + 平方比率低速抑制求目标，迁入 Inertia/Bounce/Snapping/Paging 显式相；Inertia 越界 >20px 就地迁 Bounce；loop 触边 ±半内容区瞬移（列表层不感知）。P5 入口推进状态机，排水尾 visual 变化 → `SlotTable.Write(slotId, float4(-visual,0,0))` + 类型化 ScrollChanged。**滚动帧成本 = 写一个 float4 + 若干事件，零布局零重建**。为什么：旧 `_xPos` vs `_container.xy` 是两个偶然不等的字段，读错哪个是隐蔽 bug；进类型后「Idle ⇒ visual==round(logical)」成为可断言不变量，回弹也从「tween 内部改写 `_tweenStart` 冒充」变成可测试的显式相迁移。
 

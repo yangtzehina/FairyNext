@@ -52,15 +52,15 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 
 ### W9-W10 文本与 FGB
 - **M1-17 字形源 + GlyphStore**（278-597 段移植 + ~1200 行）：CPU 字体表（仅 glyf）、位图/SDF 页、append-only 三本账、页淘汰双门、generation 仅 P2、双半区接口。CFF 归编译器离线（M2-09）、emoji 走位图。
-- **M1-18 TextCore 无状态排版**（~1300 行）：Layout 纯函数（断行/对齐/ellipsis/measure 两把尺/LayoutArena/ref struct 结果）；M1 简化面=cmap 直映+纯文本；P5 量/P7 出 quad/Pending alpha=0。验证：文本·不变量 1/2/3（跨 DPI bit-identical）。
+- **M1-18 TextCore 无状态排版**（~1300 行）：Layout 纯函数（断行/对齐/ellipsis/measure 两把尺/LayoutArena/ref struct 结果）；M1 简化面=cmap 直映+纯文本；P5 量/P7 出 quad/Pending alpha=0。验证：文本·不变量 1/2/3（跨 DPI bit-identical）。M1-16 留缝：度量接缝签名已钉（`ITextMeasure` + `LayoutEngine.TextMeasure` 属性，P5 四层的第一层），Text 通道的排水消费者由本包注册（布局引擎只消费 Layout）。
 - **M1-19 FGB blob 写读**（340 移植 + ~900 行）：头/段目录/全段写入器与 Cast 视图；NODE 列序=NodeTable ABI（同源 codegen）。fuzz 雏形。移植：Fqs blob IO+FNV 直搬。
 
 ### W10-W11 编译器与事件
-- **M1-20 FgbCompiler = 无头运行时**（~2500 行，3 会话，关键路径汇合点）：.fui→建树→跑 P5+度量→Extract→冻结各段；relation→EdgeFollow+分层拒环+拓扑排序；pivotAsAnchor 编译期消灭；GGroup 真节点化；localId 映射；canonical 去重；内存计划打印。门：**约束环拒绝（L0）、编译产物 golden（L1）、等价性金样（编译 Extract=运行时 Extract 逐字节）上线**。
+- **M1-20 FgbCompiler = 无头运行时**（~2500 行，3 会话，关键路径汇合点）：.fui→建树→跑 P5+度量→Extract→冻结各段；relation→EdgeFollow+分层拒环+拓扑排序；pivotAsAnchor 编译期消灭；GGroup 真节点化；localId 映射；canonical 去重；内存计划打印。门：**约束环拒绝（L0）、编译产物 golden（L1）、等价性金样（编译 Extract=运行时 Extract 逐字节）上线**。M1-16 留缝三条：① 约束环拒绝门**复用** `ConstraintGraphBuilder.Seal`（CycleRejected 带环路径已落地，本包把结果变 FGM 诊断，不另写第二套拒环）；② `ConstraintOp.pivotCorrect` 是保留位——修正系数与置位入口随 pivotAsAnchor 消灭在此烘焙（builder 现拒绝置位）；③ 编译期布局写集落地后，`LayoutStats.LateSlotAllocs` 应恒零并升格为门（手建路径的迟到槽分配从此只属于测试）。
 - **M1-21 事件：命中与派发**（~1500 行 + PixelHitTest 82 shim）：HitMode 列、迭代命中（上帧序、local⊗slotMatrix、clip 剪枝、1bit 位图）、EventId<T>/ListenerBlock/链快照、downChain click、CaptureTouch/monitor、EventCtx ref struct。验收项（2026-08 审计遗留）：① **DownLayer 通道要有首个 Mark 者与覆盖**——该通道在 M1-14 阶段无人 Mark（level/sortingOrder 类属性未接），排水代码是零覆盖死路径；本包接入首个写者时必须补「DownLayer 级联落到命中/绘制序」的行为用例。② **clip 剪枝消费 Extract 的 `_clipOf` 数据面，不得读 worldVisual**——其 clip 域 16 位已裁决为保留段恒零、取值宏已删（14b-4 死字段裁决，见 architecture.md 平面三回写）；命中测试的 clip 语义与渲染同源，须有用例钉死两侧同判。
 
 ### W11-W12 装载与孤岛
-- **M1-22 装载三操作 + 同步实例化**（~1500 行）：验证/视图/绑定（PTCH 回填/DEPS/纹理懒装载）、LoadReport、降级二分（结构性拒载 vs 哈希降 Extract）、PLAN 实例化（顶层块+嵌套 slab+memcpy+arm-not-mount）、Pool 雏形。门：**fuzz 门转常设**。
+- **M1-22 装载三操作 + 同步实例化**（~1500 行）：验证/视图/绑定（PTCH 回填/DEPS/纹理懒装载）、LoadReport、降级二分（结构性拒载 vs 哈希降 Extract）、PLAN 实例化（顶层块+嵌套 slab+memcpy+arm-not-mount）、Pool 雏形。门：**fuzz 门转常设**。M1-16 留缝：resolved 槽的「实例化批量分配」接 `LayoutEngine.Arm`/`RegisterLinear` 的手建分配路径——实例化时按编译产物的布局写集一次分齐，运行期 resolvedRef 不再变（不变量 7 的另一半）。
 - **M1-23 孤岛②③④**（~1200 行）：AddIsland/IIslandContent（含 StillAnimating）、visual 并入下行、②自定义材质（clip include/scissor 降级）、③外部原生（SortingGroup 对齐 run 序、Spine kind）、④stencil 括号。验收项（2026-08 审计遗留）：① `AnyIslandAnimating` 是零脏帧短路的第三前提，M1-14 阶段恒 false 无门——本包必须补「活孤岛自报 StillAnimating ⇒ stats.Dirty 为真、presents 照涨」的正例与「自报静止 ⇒ 短路恢复」的收据断言，否则第三前提仍是无人执法的纸面条款。② **孤岛表进规范形**——`CanonicalStream` 的首用序重编号只盖槽表与 clip 表，孤岛挂载记录不在规范化范围内；本包落地 AddIsland 时必须把孤岛表纳入同一套「分配序非身份」的重编号（否则增量门与 Trace 哈希对孤岛记录要么漏比要么把分配序漂移误报为差异）。
 
 ### W12-W13 验证与工具

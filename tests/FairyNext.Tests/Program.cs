@@ -40,6 +40,9 @@ public static partial class Program
         FuiReaderSuite();    // M1-12 .fui 前端读取器（ByteBuffer 移植 + 包/组件/显示列表解析）：
                              // 对 tests/fixtures/fui 的真实样例包做字段级对照（对照物 = 编辑器授权 XML），
                              // 用例在 FuiReaderTests.cs（partial）
+        LayoutSuite();       // M1-16 布局：约束图（拓扑序/分层拒环/offset 捕获）+ LinearLayout +
+                             // parentUsesSize 受控窗 + **P5 幂等断言与布局差分神谕（L2）**上线，
+                             // 正例负例各配，用例在 LayoutTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;
