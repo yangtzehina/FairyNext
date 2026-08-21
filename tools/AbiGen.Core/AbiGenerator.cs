@@ -31,6 +31,9 @@ public static class AbiGenerator
     private const string RoutePrefix = "Route";
     private const string FlagsPrefix = "Flags";
     private const string RadialFillPrefix = "RadialFill";
+    private const string FgbHeaderPrefix = "FgbHeader";
+    private const string FgbDirPrefix = "FgbDir";
+    private const string FgbFlagPrefix = "FgbFlag";
 
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
@@ -65,7 +68,7 @@ public static class AbiGenerator
         o.Line("/// </summary>");
         o.Line("public static class AbiLayout");
         o.Line("{");
-        EmitCsBody(o, includeVerify: true);
+        EmitCsBody(o, includeVerify: true, includeFgb: true);
         o.Line("}");
         return o.ToString();
     }
@@ -86,7 +89,8 @@ public static class AbiGenerator
         o.Line("/// </summary>");
         o.Line("public static class AbiMock");
         o.Line("{");
-        EmitCsBody(o, includeVerify: false);
+        // mock 是 GPU 流货币的独立复述；FGB 容器/NODE 列是 CPU 侧记录，mock 无消费面，不进。
+        EmitCsBody(o, includeVerify: false, includeFgb: false);
         o.Line("}");
         return o.ToString();
     }
@@ -137,7 +141,7 @@ public static class AbiGenerator
     // ========================================================================
     // C# 公共体（布局文件与 mock 文件共用——两份文本的差异只有头/命名空间/类名/校验）
     // ========================================================================
-    private static void EmitCsBody(TextOut o, bool includeVerify)
+    private static void EmitCsBody(TextOut o, bool includeVerify, bool includeFgb)
     {
         const string I = "    ";
 
@@ -156,9 +160,10 @@ public static class AbiGenerator
         EmitCsBits(o, I, FlagsPrefix, "flags", "flags 位域", Abi.QuadFlagBits);
         EmitCsBits(o, I, RadialFillPrefix, "aux", "aux 位域（仅 flags.radialFill 置位时有效）", Abi.RadialFillAuxBits);
         EmitCsPropIds(o, I);
-        EmitCsAsserts(o, I);
+        if (includeFgb) EmitCsFgb(o, I);
+        EmitCsAsserts(o, I, includeFgb);
 
-        if (includeVerify) EmitCsVerify(o, I);
+        if (includeVerify) EmitCsVerify(o, I, includeFgb);
     }
 
     private static void EmitCsHeader(TextOut o, string what, string? note = null)
@@ -237,10 +242,51 @@ public static class AbiGenerator
     }
 
     /// <summary>
+    /// FGB 容器记录布局（M1-19）：头/段目录偏移、flags 位域、段 fourcc、NODE 列序。
+    /// 只进 CS 布局生成物——mock 是 GPU 流货币的独立复述，无 FGB 消费面；HLSL 更不沾。
+    /// </summary>
+    private static void EmitCsFgb(TextOut o, string indent)
+    {
+        EmitCsFields(o, indent, FgbHeaderPrefix, "FgbHeader 字段（64B，16B 对齐；装载门 1/3 的读口）", Abi.FgbHeaderFields);
+        EmitCsFields(o, indent, FgbDirPrefix, "SectionDir 条目字段（24B；装载门 2 的读口）", Abi.FgbSectionDirFields);
+        EmitCsBits(o, indent, FgbFlagPrefix, "flags", "FgbHeader.flags 位域", Abi.FgbFlagBits);
+
+        o.Line(indent + "// ---- FGB 段 fourcc（id append-only 永不复用；未知 fourcc 读取器整段跳过）----");
+        foreach (var f in Abi.FgbSectionIds)
+        {
+            o.Line(indent + "/// <summary>「" + FourccChars(f.Value) + "」：" + Xml(f.Doc) + "</summary>");
+            o.Line(indent + "public const uint FgbSection" + f.Name + " = 0x"
+                + f.Value.ToString("X8", CultureInfo.InvariantCulture) + "u;");
+        }
+        o.Line();
+
+        o.Line(indent + "// ---- NODE 段列序（列序 = NodeTable ABI；实例化 memcpy 的正确性锚）----");
+        o.Line(indent + "// 列下标即段内顺序；手写第二份列序是缺陷——读写两侧都从本表走。");
+        o.Line(indent + "/// <summary>NODE 段列数。</summary>");
+        o.Line(indent + "public const int NodeColumnCount = " + Inv(Abi.NodeColumns.Length) + ";");
+        for (int i = 0; i < Abi.NodeColumns.Length; i++)
+        {
+            var c = Abi.NodeColumns[i];
+            o.Line(indent + "/// <summary>[" + Inv(i) + "] +" + Inv(c.ElementSize)
+                + (c.Rebase ? "（rebase：段内相对下标，实例化加基址回填）" : "") + "：" + Xml(c.Doc) + "</summary>");
+            o.Line(indent + "public const int NodeCol" + c.Name + " = " + Inv(i) + ";");
+            o.Line(indent + "public const int NodeCol" + c.Name + "Size = " + Inv(c.ElementSize) + ";");
+            o.Line(indent + "public const bool NodeCol" + c.Name + "Rebase = " + (c.Rebase ? "true" : "false") + ";");
+        }
+        o.Line();
+    }
+
+    /// <summary>fourcc u32 → 可读四字符（little-endian：首字符在最低字节）。</summary>
+    private static string FourccChars(uint v) => new string(new[]
+    {
+        (char)(v & 0xFF), (char)((v >> 8) & 0xFF), (char)((v >> 16) & 0xFF), (char)((v >> 24) & 0xFF),
+    });
+
+    /// <summary>
     /// 编译期断言：条件不成立时表达式折叠为 1/0 → CS0020，构建失败（L0：错在跑起来之前）。
     /// 手改生成物里的单个偏移不会安静通过——先撞编译错，再撞字节比对门。
     /// </summary>
-    private static void EmitCsAsserts(TextOut o, string indent)
+    private static void EmitCsAsserts(TextOut o, string indent, bool includeFgb)
     {
         o.Line(indent + "// ---- 编译期断言：字段首尾相接、末字段收口于结构尺寸、位域覆盖全 32 位 ----");
         o.Line(indent + "// 不成立即 1/0 → CS0020 编译错（L0 门：错误在跑起来之前死掉）。");
@@ -249,6 +295,19 @@ public static class AbiGenerator
         EmitBitAsserts(o, indent, RoutePrefix, Abi.RouteBits);
         EmitBitAsserts(o, indent, FlagsPrefix, Abi.QuadFlagBits);
         EmitBitAsserts(o, indent, RadialFillPrefix, Abi.RadialFillAuxBits);
+        if (includeFgb)
+        {
+            EmitFieldAsserts(o, indent, FgbHeaderPrefix, Abi.FgbHeaderFields, "FgbHeaderSize");
+            EmitFieldAsserts(o, indent, FgbDirPrefix, Abi.FgbSectionDirFields, "FgbSectionDirEntrySize");
+            EmitBitAsserts(o, indent, FgbFlagPrefix, Abi.FgbFlagBits);
+            var sum = new StringBuilder();
+            for (int i = 0; i < Abi.NodeColumns.Length; i++)
+            {
+                if (i > 0) sum.Append(" + ");
+                sum.Append("NodeCol").Append(Abi.NodeColumns[i].Name).Append("Size");
+            }
+            o.Line(indent + "private const int AssertNodeColumnBytes = 1 / ((" + sum + " == NodeBytesPerNode) ? 1 : 0);");
+        }
         o.Line();
     }
 
@@ -276,7 +335,7 @@ public static class AbiGenerator
     /// 定义点交叉校验：生成物常量（编译期）vs Abi.cs 数据表（运行期）。逐项比，首条不符即返回说明。
     /// 覆盖字节比对门够不着的一类事故：生成物与定义点被同时手改成「自洽但错」的状态。
     /// </summary>
-    private static void EmitCsVerify(TextOut o, string indent)
+    private static void EmitCsVerify(TextOut o, string indent, bool includeFgb)
     {
         const string I2 = "        ";
         o.Line(indent + "/// <summary>");
@@ -312,6 +371,28 @@ public static class AbiGenerator
         {
             var p = Abi.PropIds[i];
             o.Line(I2 + "if (Abi.PropIds[" + Inv(i) + "].Id != PropId" + p.Name + ") return \"PropId " + p.Name + " 与生成物不符\";");
+        }
+
+        if (includeFgb)
+        {
+            EmitVerifyFields(o, I2, FgbHeaderPrefix, "Abi.FgbHeaderFields", Abi.FgbHeaderFields);
+            EmitVerifyFields(o, I2, FgbDirPrefix, "Abi.FgbSectionDirFields", Abi.FgbSectionDirFields);
+            EmitVerifyBits(o, I2, FgbFlagPrefix, "Abi.FgbFlagBits", Abi.FgbFlagBits);
+            o.Line(I2 + "if (Abi.FgbSectionIds.Length != " + Inv(Abi.FgbSectionIds.Length) + ") return \"Abi.FgbSectionIds 表长与生成物不符\";");
+            for (int i = 0; i < Abi.FgbSectionIds.Length; i++)
+            {
+                var f = Abi.FgbSectionIds[i];
+                o.Line(I2 + "if (Abi.FgbSectionIds[" + Inv(i) + "].Value != FgbSection" + f.Name
+                    + ") return \"fourcc " + f.Name + " 与生成物不符\";");
+            }
+            o.Line(I2 + "if (Abi.NodeColumns.Length != NodeColumnCount) return \"Abi.NodeColumns 表长与生成物不符\";");
+            for (int i = 0; i < Abi.NodeColumns.Length; i++)
+            {
+                var c = Abi.NodeColumns[i];
+                o.Line(I2 + "if (Abi.NodeColumns[" + Inv(i) + "].ElementSize != NodeCol" + c.Name + "Size"
+                    + " || Abi.NodeColumns[" + Inv(i) + "].Rebase != NodeCol" + c.Name + "Rebase) return \""
+                    + "NODE 列 " + c.Name + " 与生成物不符\";");
+            }
         }
 
         o.Line(I2 + "return null;");

@@ -10,5 +10,7 @@
     <!-- .fui 前端（M1-12）：ByteBuffer.ReadColor 出 Numerics 的 Color32，包身份 sourceHash 走 FnvHash。
          经 Core 传递也拿得到，写明是因为前端**直接**依赖它，不该靠别人的引用面活着。 -->
     <ProjectReference Include="../Numerics/FairyNext.Numerics.csproj" />
+    <!-- FGB 写入器（M1-19）：头/目录偏移与段 fourcc 直读 AbiLayout/Abi——同一条「直接依赖写明」纪律。 -->
+    <ProjectReference Include="../Contracts/FairyNext.Contracts.csproj" />
   </ItemGroup>
 </Project>

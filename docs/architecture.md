@@ -1112,7 +1112,13 @@ sealed class LoadedPackage {          // AssetServer 内部
 }
 ```
 
-**编辑器语义 → 烘焙产物一览**。这张表就是「运行时成本搬到构建期」的账本：左列每一项在旧架构里都是一段运行时解释代码，右列全部是 `Cast` 直读的冻结数据。
+> **头布局对草图的一处修正 + 全部记录布局落数据表（M1-19 实现期补充）。** 草图把 `selfHash` 排在 flags 后的 @12——非对齐 u64 在 `Cast` 直读的世界里是隐患，落地时 @12 插 4B 零填充使三个 u64 哈希 16B 对齐，`scaleLevel/branchId/sectionCount` 顺延到 @40，尾部 16B 保留写零（append-only：新头字段从保留区切）。头/段目录/flags 位域/段 fourcc/NODE 列序全部成为 `Abi.cs` 的数据表（`FgbHeaderFields`/`FgbSectionDirFields`/`FgbFlagBits`/`FgbSectionIds`/`NodeColumns`），机制 8 的「FGB 记录布局集中为纯数据文件」从此兑现；生成物只扩 `AbiLayout`（NodeCol*/FgbSection*/偏移常量 + 编译期断言 + Verify 交叉校验）——mock 是 GPU 流货币的独立复述、无 FGB 消费面，HLSL 更不沾，两份生成物不动。
+>
+> **NODE 段是「count 的纯函数」，无列目录（M1-19 实现期补充）。** payload = 16B 段头（`u32 nodeCount` + 12B 零填充）+ 按 `Abi.NodeColumns` 声明序逐列排布，列起点 16B 对齐（M1-22 实例化 memcpy 的目标形态）；字段级自描述在 blob 里不存在——列序是封闭世界 ABI，由「数据表 → 生成物字节比对门 → `NodeTable.ExportColumn` 逐列对账测试」三方钉死，树侧只有生成物列号到私有列数组的名义映射，没有第二份列序。列清单 = 21 根 authored 真值列收口 80B/节点（编译期断言）；world/paintIndex/dirtyWord/gen 等派生列与槽簿记不进段——它们不参与实例化 memcpy。写侧导出**原始真值**（拓扑列为绝对下标、环形链原样）；模板镜像的相对化是 M1-20 冻结时的变换，memcpy 后加基址回填是 M1-22，两者消费列表上的 Rebase 位，容器与树都不解释它。读侧只收精确尺寸（±1 字节皆拒）——半列不是列，多余字节没有合法产者。
+>
+> **写入器在任何宿主上产出同一批字节（M1-19 实现期补充）。** fork 的 FQS 写入器靠 `MemoryMarshal` 依赖宿主字节序（BE 构建机会产出 BE blob，靠读侧 magic 拒）；`FgbWriter` 全部标量走 `BinaryPrimitives.*LittleEndian`，BE 构建机也产出 LE blob——编译产物 golden（不变量清单「等价性金样」）才不用按构建机分叉。填充一律写零（垃圾填充 = 每次写出不同字节，canonical 去重与 golden 全废）；`selfHash` 字段按零参与散列，校验用三段 FNV 续链免整块复制，算法唯一实现点在读侧 `FgbBlobView.ComputeSelfHash`，写入器调它补钉——写读两侧不许各抄一份。段顺序 = `AddSection` 调用序：规范段序与 canonical 去重归 M1-20 编译器，容器不替编译器做排序决定。
+>
+> **失败面二值 + `FgbGate` 门号词表（M1-19 实现期补充）。** 任意字节序列喂 `FgbBlobView.TryOpen` 的可接受结果只有「false + 门号」与「true + 全段可达」——打开即验完（头/目录/越界/对齐/selfHash），成功后取用不再失败，唯一例外是 `TryRecords<T>` 的记录宽整除检查（T 是取用方才知道的，半条记录被挡成有声拒绝而不是 `Cast` 静默截断）。门号 enum append-only 永不重编号（LoadReport 里的门号是跨版本可读的诊断词表）；读侧纪律沿 .fui 侧同款：先门后分配（段数水位在读目录前卡）、无符号先界后加（u64 `offset+length` 回绕拦在比较写法上）。fuzz（1200 变体、seed 固定、截断/翻位/伪目录/尾垃圾四类）已随主 runner 常驻，M1-22 转常设门时扩语料。这张表就是「运行时成本搬到构建期」的账本：左列每一项在旧架构里都是一段运行时解释代码，右列全部是 `Cast` 直读的冻结数据。
 
 | 编辑器语义 | 烘焙产物（段） | 运行期剩余成本 |
 |---|---|---|

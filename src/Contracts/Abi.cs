@@ -28,6 +28,10 @@ public enum AbiFieldKind : byte
     Float2 = 1,
     UInt32 = 2,
     Pad = 3,
+    // ---- M1-19 追加（append-only）：FGB 头/NODE 列是 CPU 侧记录，不进 HLSL 生成物 ----
+    UInt64 = 4,
+    UInt16 = 5,
+    Float32 = 6,
 }
 
 /// <summary>生成物投放面：标量按此决定进哪几份产物（位域与字段表三份全进）。</summary>
@@ -115,6 +119,48 @@ public readonly struct AbiPropId
     }
 }
 
+/// <summary>
+/// FGB NODE 段的一根列（M1-19）。列序 = 表内声明序 = <c>NodeTable</c> 真值列声明序——
+/// 「NODE 段列序与 NodeTable 列布局是同一份 ABI」（编译平面接缝，全项目最硬接缝）的数据本体：
+/// 实例化 memcpy（每列一次 Array.Copy）的正确性由本表单源保证，运行时/编译器/生成物都
+/// 只准从这里读列序，手写第二份列序是缺陷。改列（增/删/改宽/重排）必 bump FgbFormatVersion。
+/// </summary>
+public readonly struct AbiNodeColumn
+{
+    public readonly string Name;
+    /// <summary>元素字节宽（列内 stride；全列宽之和 = <see cref="Abi.NodeBytesPerNode"/>）。</summary>
+    public readonly int ElementSize;
+    public readonly AbiFieldKind Kind;
+    /// <summary>true = 列存**段内相对下标**，实例化 memcpy 后加基址回填（M1-22 消费；哨兵语义随其落地）。</summary>
+    public readonly bool Rebase;
+    public readonly string Doc;
+
+    public AbiNodeColumn(string name, int elementSize, AbiFieldKind kind, bool rebase, string doc)
+    {
+        Name = name;
+        ElementSize = elementSize;
+        Kind = kind;
+        Rebase = rebase;
+        Doc = doc;
+    }
+}
+
+/// <summary>FGB 段 fourcc（M1-19）。id append-only：值一经入库永不复用；未知 fourcc 读取器整段跳过。</summary>
+public readonly struct AbiFourcc
+{
+    public readonly string Name;
+    /// <summary>四字符按 little-endian u32（首字符在最低字节）。与 Name 的字节一致性有测试钉住。</summary>
+    public readonly uint Value;
+    public readonly string Doc;
+
+    public AbiFourcc(string name, uint value, string doc)
+    {
+        Name = name;
+        Value = value;
+        Doc = doc;
+    }
+}
+
 /// <summary>进生成物的标量常量。Value 直接取自本文件的 const，杜绝表与 const 两份值。</summary>
 public readonly struct AbiScalar
 {
@@ -137,10 +183,13 @@ public readonly struct AbiScalar
 
 public static class Abi
 {
-    // ---- FGB 容器（设计书 §4.8）----
+    // ---- FGB 容器（设计书 §4.8；头/段目录/NODE 列的记录布局见文件下方数据表，M1-19）----
     public const uint FgbMagic = 0x31424746;       // "FGB1" little-endian
     public const int FgbFormatVersion = 1;         // 布局变更必 bump（结构性不符 → 拒载）
     public const int FgbSectionAlignment = 16;     // 段 16B 对齐，定长记录 MemoryMarshal.Cast 直读
+    public const int FgbHeaderSize = 64;           // FgbHeader 定长（16B 对齐；布局 = FgbHeaderFields）
+    public const int FgbSectionDirEntrySize = 24;  // SectionDir 条目定长（布局 = FgbSectionDirFields）
+    public const int NodeBytesPerNode = 80;        // NODE 段列元素宽之和 = NodeTable 真值列 80B/节点
 
     // ---- Quad 实例流（设计书 §4.2）----
     public const int QuadInstanceSize = 80;        // bytes/实例，16B 对齐；布局变更必 bump ShaderAbiVersion
@@ -186,6 +235,10 @@ public static class Abi
         new AbiScalar("MaxObservableProps", MaxObservableProps, false, AbiScope.CSharp, "64bit 脏掩码硬顶；超出 = 编译错误"),
         new AbiScalar("CommandWaveLimit", CommandWaveLimit, false, AbiScope.CSharp, "P3 波次上限"),
         new AbiScalar("LayoutMicroDrainLimit", LayoutMicroDrainLimit, false, AbiScope.CSharp, "P5 兜底微排水轮次"),
+        // ---- M1-19 追加（append-only：只在表尾续，不插空）----
+        new AbiScalar("FgbHeaderSize", FgbHeaderSize, false, AbiScope.CSharp, "FgbHeader 定长（16B 对齐；布局 = FgbHeaderFields）"),
+        new AbiScalar("FgbSectionDirEntrySize", FgbSectionDirEntrySize, false, AbiScope.CSharp, "SectionDir 条目定长（布局 = FgbSectionDirFields）"),
+        new AbiScalar("NodeBytesPerNode", NodeBytesPerNode, false, AbiScope.CSharp, "NODE 段列元素宽之和 = NodeTable 真值列 80B/节点"),
     };
 
     /// <summary>
@@ -304,5 +357,104 @@ public static class Abi
         new AbiPropId("Rotation", 132, "Transform", "旋转（弧度，绕 pivot）"),
         new AbiPropId("Skew", 133, "Transform", "剪切角（弧度，水平剪切；fork 的双值 skewX/skewY 编译期归一）"),
         new AbiPropId("PixelSnap", 134, "Transform", "像素对齐位（不级联；存 localVisual 位段，通道归 Transform）"),
+    };
+
+    // ========================================================================
+    // FGB 容器记录布局（M1-19）。「FGB 全部记录布局集中为纯数据 C# 文件」（编译平面机制 8）
+    // 从此处开始兑现：头、段目录、NODE 列序都是数据表，写入器/读取器/生成物同源消费。
+    // ========================================================================
+
+    /// <summary>
+    /// FgbHeader 字段表（64B，16B 对齐）。与架构文档草图的唯一偏离：@12 插 4B 填充使三个
+    /// u64 哈希 16B 对齐（草图把 selfHash 排在 flags 后的 @12，非对齐 u64 在 Cast 直读的
+    /// 世界里是隐患）；scaleLevel/branchId/sectionCount 顺序照草图，尾部 16B 保留写零。
+    /// </summary>
+    public static readonly AbiField[] FgbHeaderFields =
+    {
+        new AbiField("Magic", "magic", 0, 4, AbiFieldKind.UInt32, "「FGB1」little-endian；不符拒载（装载门 1）"),
+        new AbiField("FormatVersion", "formatVersion", 4, 4, AbiFieldKind.UInt32, "精确匹配；不符 = 结构性拒载，不降级（装载门 1）"),
+        new AbiField("Flags", "flags", 8, 4, AbiFieldKind.UInt32, "位域见 FgbFlagBits；未知位置位 = 拒载（头无段粒度前向兼容）"),
+        new AbiField("Reserved0", "_reserved0", 12, 4, AbiFieldKind.Pad, "对齐填充，写零（使 u64 哈希三连 16B 对齐）"),
+        new AbiField("SelfHash", "selfHash", 16, 8, AbiFieldKind.UInt64, "全 blob FNV-1a，本字段按零参与散列；发布包可信任跳过（装载门 3）"),
+        new AbiField("SourceHash", "sourceHash", 24, 8, AbiFieldKind.UInt64, "源 .fui 描述符字节哈希（四维身份 1/4）"),
+        new AbiField("CombinedRefHash", "combinedRefHash", 32, 8, AbiFieldKind.UInt64, "链上全部被引用包 sourceHash，id 去重 ordinal 排序（四维身份 2/4）"),
+        new AbiField("ScaleLevel", "scaleLevel", 40, 2, AbiFieldKind.UInt16, "内容缩放档（四维身份 3/4）"),
+        new AbiField("BranchId", "branchId", 42, 2, AbiFieldKind.UInt16, "branch 变体（四维身份 4/4）"),
+        new AbiField("SectionCount", "sectionCount", 44, 4, AbiFieldKind.UInt32, "段目录条目数（目录紧随头部）"),
+        new AbiField("Reserved1", "_reserved1", 48, 16, AbiFieldKind.Pad, "保留，写零（append-only：新字段从此处切）"),
+    };
+
+    /// <summary>SectionDir 条目字段表（24B；目录数组紧随 64B 头，条目 0 起）。</summary>
+    public static readonly AbiField[] FgbSectionDirFields =
+    {
+        new AbiField("Fourcc", "fourcc", 0, 4, AbiFieldKind.UInt32, "段 id（FgbSectionIds）；未知 fourcc 整段跳过——前向兼容只保留在段粒度"),
+        new AbiField("Reserved", "_reserved", 4, 4, AbiFieldKind.Pad, "保留，写零"),
+        new AbiField("Offset", "offset", 8, 8, AbiFieldKind.UInt64, "段起点（blob 内字节偏移；必须 FgbSectionAlignment 对齐，装载门 2）"),
+        new AbiField("Length", "length", 16, 8, AbiFieldKind.UInt64, "段字节长（offset + length ≤ blob 长，装载门 2）"),
+    };
+
+    /// <summary>FgbHeader.flags 位域（u32，表覆盖全 32 位）。保留位非零 = 拒载。</summary>
+    public static readonly AbiBitField[] FgbFlagBits =
+    {
+        new AbiBitField("LittleEndian", 0, 1, "LE 断言位：写入器恒置 1；读到 0 = 大端产物，拒载"),
+        new AbiBitField("Compressed", 1, 1, "压缩位：M1 不支持，置位即拒载（结构性）"),
+        new AbiBitField("Reserved", 2, 30, "保留，写零；非零拒载"),
+    };
+
+    /// <summary>
+    /// FGB 段 fourcc 清单（架构文档「FGB 顶层布局」全段；M1-19 只有 NODE 有消费者，
+    /// 其余先占 id——id 空间 append-only，永不复用）。值 = 四字符 little-endian u32。
+    /// </summary>
+    public static readonly AbiFourcc[] FgbSectionIds =
+    {
+        new AbiFourcc("Strt", 0x54525453, "不可变字符串表"),
+        new AbiFourcc("Lang", 0x474E414C, "每语言一段补丁（视图叠加，不改 STRT；同 fourcc 多段）"),
+        new AbiFourcc("Comp", 0x504D4F43, "ComponentDef[]"),
+        new AbiFourcc("Node", 0x45444F4E, "NodeRecord SoA 分列子段（列序 = NodeColumns 表）"),
+        new AbiFourcc("Plan", 0x4E414C50, "InstStep[] 后序扁平实例化计划"),
+        new AbiFourcc("Quad", 0x44415551, "QuadInstance[]（80B shader ABI）"),
+        new AbiFourcc("Segs", 0x53474553, "段表（冻结布局）"),
+        new AbiFourcc("Leaf", 0x4641454C, "叶表"),
+        new AbiFourcc("Clip", 0x50494C43, "ClipEntry 表"),
+        new AbiFourcc("Ptch", 0x48435450, "UvPatch[] 跨包 UV 装载期回填"),
+        new AbiFourcc("Cnst", 0x54534E43, "增量约束图（ConstraintOp + FanOut CSR）"),
+        new AbiFourcc("Bind", 0x444E4942, "StateProgram（归状态平面）"),
+        new AbiFourcc("Anim", 0x4D494E41, "Timeline/Track/Key 冻结记录"),
+        new AbiFourcc("Sprt", 0x54525053, "sprite rects"),
+        new AbiFourcc("Tref", 0x46455254, "纹理/声音符号引用"),
+        new AbiFourcc("Deps", 0x53504544, "依赖包 { pkgId, expectedSourceHash }[]"),
+        new AbiFourcc("Hitt", 0x54544948, "像素点击测试位图"),
+        new AbiFourcc("Brch", 0x48435242, "branch 元数据"),
+    };
+
+    /// <summary>
+    /// NODE 段列序（M1-19）。表内声明序 = 段内列序 = <c>NodeTable</c> 真值列声明序，
+    /// 三者由「本表单源 + 生成物字节比对 + 逐列对账测试」钉在一起；元素宽之和有编译期
+    /// 断言收口于 <see cref="NodeBytesPerNode"/>。派生列（world/paintIndex/dirtyWord/gen…）
+    /// 与槽簿记**不进本表**——它们不参与实例化 memcpy（NodeTable 的 SlotFlags 文件头有病因）。
+    /// </summary>
+    public static readonly AbiNodeColumn[] NodeColumns =
+    {
+        new AbiNodeColumn("Parent", 4, AbiFieldKind.UInt32, true, "父下标（0 = 无）"),
+        new AbiNodeColumn("FirstChild", 4, AbiFieldKind.UInt32, true, "首子下标"),
+        new AbiNodeColumn("NextSib", 4, AbiFieldKind.UInt32, true, "后兄下标（环形链）"),
+        new AbiNodeColumn("PrevSib", 4, AbiFieldKind.UInt32, true, "前兄下标（环形链）"),
+        new AbiNodeColumn("OwnerInst", 4, AbiFieldKind.UInt32, true, "所属组件实例节点下标"),
+        new AbiNodeColumn("LocalId", 2, AbiFieldKind.UInt16, false, "模板内寻址 id（localId u16）"),
+        new AbiNodeColumn("TypeId", 2, AbiFieldKind.UInt16, false, "节点类型 id"),
+        new AbiNodeColumn("PosX", 4, AbiFieldKind.Float32, false, "authored 位置 x（节点原点在父空间）"),
+        new AbiNodeColumn("PosY", 4, AbiFieldKind.Float32, false, "authored 位置 y（y 向下）"),
+        new AbiNodeColumn("Width", 4, AbiFieldKind.Float32, false, "authored 宽"),
+        new AbiNodeColumn("Height", 4, AbiFieldKind.Float32, false, "authored 高"),
+        new AbiNodeColumn("ScaleX", 4, AbiFieldKind.Float32, false, "缩放 x"),
+        new AbiNodeColumn("ScaleY", 4, AbiFieldKind.Float32, false, "缩放 y"),
+        new AbiNodeColumn("Rotation", 4, AbiFieldKind.Float32, false, "旋转（弧度，绕 pivot）"),
+        new AbiNodeColumn("Skew", 4, AbiFieldKind.Float32, false, "剪切角（弧度）"),
+        new AbiNodeColumn("PivotX", 4, AbiFieldKind.Float32, false, "pivot x（比例）"),
+        new AbiNodeColumn("PivotY", 4, AbiFieldKind.Float32, false, "pivot y（比例）"),
+        new AbiNodeColumn("LocalVisual", 4, AbiFieldKind.UInt32, false, "局部视觉位段（alpha/visible/grayed/touchable/pixelSnap 打包）"),
+        new AbiNodeColumn("ContentRef", 4, AbiFieldKind.UInt32, false, "内容侧表引用（不是节点下标，不回填）"),
+        new AbiNodeColumn("StateRef", 4, AbiFieldKind.UInt32, false, "状态侧表引用"),
+        new AbiNodeColumn("ResolvedRef", 4, AbiFieldKind.UInt32, false, "resolved 几何槽引用（实例化批量分配后不再变，不变量 7）"),
     };
 }

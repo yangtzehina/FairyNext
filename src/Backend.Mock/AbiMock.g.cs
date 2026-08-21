@@ -50,6 +50,12 @@ public static class AbiMock
     public const int CommandWaveLimit = 4;
     /// <summary>P5 兜底微排水轮次</summary>
     public const int LayoutMicroDrainLimit = 3;
+    /// <summary>FgbHeader 定长（16B 对齐；布局 = FgbHeaderFields）</summary>
+    public const int FgbHeaderSize = 64;
+    /// <summary>SectionDir 条目定长（布局 = FgbSectionDirFields）</summary>
+    public const int FgbSectionDirEntrySize = 24;
+    /// <summary>NODE 段列元素宽之和 = NodeTable 真值列 80B/节点</summary>
+    public const int NodeBytesPerNode = 80;
 
     // ---- QuadInstance 字段（80B，16B 对齐） ----
     /// <summary>rect @0 +16：xy = 槽本地 min 角，zw = size</summary>

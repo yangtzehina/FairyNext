@@ -54,6 +54,11 @@ public static partial class Program
                              // kerning 求和 + 文本·不变量 1/2/3（跨 DPI 位等/双跑/arena 复用）+
                              // P5 度量层（autoSize/回流）+ 三级惰性与 slack 档 + Pending α=0 +
                              // 页引用纪律 + 核按钮端到端，用例在 TextCoreTests.cs（partial）
+        FgbSuite();          // M1-19 FGB blob 写读：容器门矩阵（magic/版本/flags/目录越界/对齐/
+                             // selfHash）+ Cast 直读 + 写读往返与确定性 + NODE 列序三方对账
+                             // （生成物 ⇄ Abi 表 ⇄ NodeTable 实际列）+ FNV fork 对拍 +
+                             // fuzz 雏形（1200 变体 seed 固定；M1-22 转常设门），
+                             // 用例在 FgbTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

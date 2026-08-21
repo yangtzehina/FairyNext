@@ -48,6 +48,12 @@ public static class AbiLayout
     public const int CommandWaveLimit = 4;
     /// <summary>P5 兜底微排水轮次</summary>
     public const int LayoutMicroDrainLimit = 3;
+    /// <summary>FgbHeader 定长（16B 对齐；布局 = FgbHeaderFields）</summary>
+    public const int FgbHeaderSize = 64;
+    /// <summary>SectionDir 条目定长（布局 = FgbSectionDirFields）</summary>
+    public const int FgbSectionDirEntrySize = 24;
+    /// <summary>NODE 段列元素宽之和 = NodeTable 真值列 80B/节点</summary>
+    public const int NodeBytesPerNode = 80;
 
     // ---- QuadInstance 字段（80B，16B 对齐） ----
     /// <summary>rect @0 +16：xy = 槽本地 min 角，zw = size</summary>
@@ -262,6 +268,204 @@ public static class AbiLayout
     /// <summary>[Transform] 像素对齐位（不级联；存 localVisual 位段，通道归 Transform）</summary>
     public const byte PropIdPixelSnap = 134;
 
+    // ---- FgbHeader 字段（64B，16B 对齐；装载门 1/3 的读口） ----
+    /// <summary>magic @0 +4：「FGB1」little-endian；不符拒载（装载门 1）</summary>
+    public const int FgbHeaderMagicOffset = 0;
+    public const int FgbHeaderMagicSize = 4;
+    /// <summary>formatVersion @4 +4：精确匹配；不符 = 结构性拒载，不降级（装载门 1）</summary>
+    public const int FgbHeaderFormatVersionOffset = 4;
+    public const int FgbHeaderFormatVersionSize = 4;
+    /// <summary>flags @8 +4：位域见 FgbFlagBits；未知位置位 = 拒载（头无段粒度前向兼容）</summary>
+    public const int FgbHeaderFlagsOffset = 8;
+    public const int FgbHeaderFlagsSize = 4;
+    /// <summary>_reserved0 @12 +4：对齐填充，写零（使 u64 哈希三连 16B 对齐）</summary>
+    public const int FgbHeaderReserved0Offset = 12;
+    public const int FgbHeaderReserved0Size = 4;
+    /// <summary>selfHash @16 +8：全 blob FNV-1a，本字段按零参与散列；发布包可信任跳过（装载门 3）</summary>
+    public const int FgbHeaderSelfHashOffset = 16;
+    public const int FgbHeaderSelfHashSize = 8;
+    /// <summary>sourceHash @24 +8：源 .fui 描述符字节哈希（四维身份 1/4）</summary>
+    public const int FgbHeaderSourceHashOffset = 24;
+    public const int FgbHeaderSourceHashSize = 8;
+    /// <summary>combinedRefHash @32 +8：链上全部被引用包 sourceHash，id 去重 ordinal 排序（四维身份 2/4）</summary>
+    public const int FgbHeaderCombinedRefHashOffset = 32;
+    public const int FgbHeaderCombinedRefHashSize = 8;
+    /// <summary>scaleLevel @40 +2：内容缩放档（四维身份 3/4）</summary>
+    public const int FgbHeaderScaleLevelOffset = 40;
+    public const int FgbHeaderScaleLevelSize = 2;
+    /// <summary>branchId @42 +2：branch 变体（四维身份 4/4）</summary>
+    public const int FgbHeaderBranchIdOffset = 42;
+    public const int FgbHeaderBranchIdSize = 2;
+    /// <summary>sectionCount @44 +4：段目录条目数（目录紧随头部）</summary>
+    public const int FgbHeaderSectionCountOffset = 44;
+    public const int FgbHeaderSectionCountSize = 4;
+    /// <summary>_reserved1 @48 +16：保留，写零（append-only：新字段从此处切）</summary>
+    public const int FgbHeaderReserved1Offset = 48;
+    public const int FgbHeaderReserved1Size = 16;
+
+    // ---- SectionDir 条目字段（24B；装载门 2 的读口） ----
+    /// <summary>fourcc @0 +4：段 id（FgbSectionIds）；未知 fourcc 整段跳过——前向兼容只保留在段粒度</summary>
+    public const int FgbDirFourccOffset = 0;
+    public const int FgbDirFourccSize = 4;
+    /// <summary>_reserved @4 +4：保留，写零</summary>
+    public const int FgbDirReservedOffset = 4;
+    public const int FgbDirReservedSize = 4;
+    /// <summary>offset @8 +8：段起点（blob 内字节偏移；必须 FgbSectionAlignment 对齐，装载门 2）</summary>
+    public const int FgbDirOffsetOffset = 8;
+    public const int FgbDirOffsetSize = 8;
+    /// <summary>length @16 +8：段字节长（offset + length ≤ blob 长，装载门 2）</summary>
+    public const int FgbDirLengthOffset = 16;
+    public const int FgbDirLengthSize = 8;
+
+    // ---- FgbHeader.flags 位域（表覆盖全 32 位；保留位写零）----
+    /// <summary>b0：LE 断言位：写入器恒置 1；读到 0 = 大端产物，拒载</summary>
+    public const int FgbFlagLittleEndianShift = 0;
+    public const int FgbFlagLittleEndianBits = 1;
+    public const uint FgbFlagLittleEndianMask = 0x1u;
+    /// <summary>b1：压缩位：M1 不支持，置位即拒载（结构性）</summary>
+    public const int FgbFlagCompressedShift = 1;
+    public const int FgbFlagCompressedBits = 1;
+    public const uint FgbFlagCompressedMask = 0x1u;
+    /// <summary>b2-31：保留，写零；非零拒载</summary>
+    public const int FgbFlagReservedShift = 2;
+    public const int FgbFlagReservedBits = 30;
+    public const uint FgbFlagReservedMask = 0x3FFFFFFFu;
+
+    // ---- FgbHeader.flags 位域 取值（与 HLSL 侧同名宏逐字对应）----
+    /// <summary>取 flags.littleEndian。</summary>
+    public static uint FgbFlagLittleEndian(uint flags) => (flags >> FgbFlagLittleEndianShift) & FgbFlagLittleEndianMask;
+    /// <summary>取 flags.compressed。</summary>
+    public static uint FgbFlagCompressed(uint flags) => (flags >> FgbFlagCompressedShift) & FgbFlagCompressedMask;
+    /// <summary>取 flags.reserved。</summary>
+    public static uint FgbFlagReserved(uint flags) => (flags >> FgbFlagReservedShift) & FgbFlagReservedMask;
+
+    // ---- FGB 段 fourcc（id append-only 永不复用；未知 fourcc 读取器整段跳过）----
+    /// <summary>「STRT」：不可变字符串表</summary>
+    public const uint FgbSectionStrt = 0x54525453u;
+    /// <summary>「LANG」：每语言一段补丁（视图叠加，不改 STRT；同 fourcc 多段）</summary>
+    public const uint FgbSectionLang = 0x474E414Cu;
+    /// <summary>「COMP」：ComponentDef[]</summary>
+    public const uint FgbSectionComp = 0x504D4F43u;
+    /// <summary>「NODE」：NodeRecord SoA 分列子段（列序 = NodeColumns 表）</summary>
+    public const uint FgbSectionNode = 0x45444F4Eu;
+    /// <summary>「PLAN」：InstStep[] 后序扁平实例化计划</summary>
+    public const uint FgbSectionPlan = 0x4E414C50u;
+    /// <summary>「QUAD」：QuadInstance[]（80B shader ABI）</summary>
+    public const uint FgbSectionQuad = 0x44415551u;
+    /// <summary>「SEGS」：段表（冻结布局）</summary>
+    public const uint FgbSectionSegs = 0x53474553u;
+    /// <summary>「LEAF」：叶表</summary>
+    public const uint FgbSectionLeaf = 0x4641454Cu;
+    /// <summary>「CLIP」：ClipEntry 表</summary>
+    public const uint FgbSectionClip = 0x50494C43u;
+    /// <summary>「PTCH」：UvPatch[] 跨包 UV 装载期回填</summary>
+    public const uint FgbSectionPtch = 0x48435450u;
+    /// <summary>「CNST」：增量约束图（ConstraintOp + FanOut CSR）</summary>
+    public const uint FgbSectionCnst = 0x54534E43u;
+    /// <summary>「BIND」：StateProgram（归状态平面）</summary>
+    public const uint FgbSectionBind = 0x444E4942u;
+    /// <summary>「ANIM」：Timeline/Track/Key 冻结记录</summary>
+    public const uint FgbSectionAnim = 0x4D494E41u;
+    /// <summary>「SPRT」：sprite rects</summary>
+    public const uint FgbSectionSprt = 0x54525053u;
+    /// <summary>「TREF」：纹理/声音符号引用</summary>
+    public const uint FgbSectionTref = 0x46455254u;
+    /// <summary>「DEPS」：依赖包 { pkgId, expectedSourceHash }[]</summary>
+    public const uint FgbSectionDeps = 0x53504544u;
+    /// <summary>「HITT」：像素点击测试位图</summary>
+    public const uint FgbSectionHitt = 0x54544948u;
+    /// <summary>「BRCH」：branch 元数据</summary>
+    public const uint FgbSectionBrch = 0x48435242u;
+
+    // ---- NODE 段列序（列序 = NodeTable ABI；实例化 memcpy 的正确性锚）----
+    // 列下标即段内顺序；手写第二份列序是缺陷——读写两侧都从本表走。
+    /// <summary>NODE 段列数。</summary>
+    public const int NodeColumnCount = 21;
+    /// <summary>[0] +4（rebase：段内相对下标，实例化加基址回填）：父下标（0 = 无）</summary>
+    public const int NodeColParent = 0;
+    public const int NodeColParentSize = 4;
+    public const bool NodeColParentRebase = true;
+    /// <summary>[1] +4（rebase：段内相对下标，实例化加基址回填）：首子下标</summary>
+    public const int NodeColFirstChild = 1;
+    public const int NodeColFirstChildSize = 4;
+    public const bool NodeColFirstChildRebase = true;
+    /// <summary>[2] +4（rebase：段内相对下标，实例化加基址回填）：后兄下标（环形链）</summary>
+    public const int NodeColNextSib = 2;
+    public const int NodeColNextSibSize = 4;
+    public const bool NodeColNextSibRebase = true;
+    /// <summary>[3] +4（rebase：段内相对下标，实例化加基址回填）：前兄下标（环形链）</summary>
+    public const int NodeColPrevSib = 3;
+    public const int NodeColPrevSibSize = 4;
+    public const bool NodeColPrevSibRebase = true;
+    /// <summary>[4] +4（rebase：段内相对下标，实例化加基址回填）：所属组件实例节点下标</summary>
+    public const int NodeColOwnerInst = 4;
+    public const int NodeColOwnerInstSize = 4;
+    public const bool NodeColOwnerInstRebase = true;
+    /// <summary>[5] +2：模板内寻址 id（localId u16）</summary>
+    public const int NodeColLocalId = 5;
+    public const int NodeColLocalIdSize = 2;
+    public const bool NodeColLocalIdRebase = false;
+    /// <summary>[6] +2：节点类型 id</summary>
+    public const int NodeColTypeId = 6;
+    public const int NodeColTypeIdSize = 2;
+    public const bool NodeColTypeIdRebase = false;
+    /// <summary>[7] +4：authored 位置 x（节点原点在父空间）</summary>
+    public const int NodeColPosX = 7;
+    public const int NodeColPosXSize = 4;
+    public const bool NodeColPosXRebase = false;
+    /// <summary>[8] +4：authored 位置 y（y 向下）</summary>
+    public const int NodeColPosY = 8;
+    public const int NodeColPosYSize = 4;
+    public const bool NodeColPosYRebase = false;
+    /// <summary>[9] +4：authored 宽</summary>
+    public const int NodeColWidth = 9;
+    public const int NodeColWidthSize = 4;
+    public const bool NodeColWidthRebase = false;
+    /// <summary>[10] +4：authored 高</summary>
+    public const int NodeColHeight = 10;
+    public const int NodeColHeightSize = 4;
+    public const bool NodeColHeightRebase = false;
+    /// <summary>[11] +4：缩放 x</summary>
+    public const int NodeColScaleX = 11;
+    public const int NodeColScaleXSize = 4;
+    public const bool NodeColScaleXRebase = false;
+    /// <summary>[12] +4：缩放 y</summary>
+    public const int NodeColScaleY = 12;
+    public const int NodeColScaleYSize = 4;
+    public const bool NodeColScaleYRebase = false;
+    /// <summary>[13] +4：旋转（弧度，绕 pivot）</summary>
+    public const int NodeColRotation = 13;
+    public const int NodeColRotationSize = 4;
+    public const bool NodeColRotationRebase = false;
+    /// <summary>[14] +4：剪切角（弧度）</summary>
+    public const int NodeColSkew = 14;
+    public const int NodeColSkewSize = 4;
+    public const bool NodeColSkewRebase = false;
+    /// <summary>[15] +4：pivot x（比例）</summary>
+    public const int NodeColPivotX = 15;
+    public const int NodeColPivotXSize = 4;
+    public const bool NodeColPivotXRebase = false;
+    /// <summary>[16] +4：pivot y（比例）</summary>
+    public const int NodeColPivotY = 16;
+    public const int NodeColPivotYSize = 4;
+    public const bool NodeColPivotYRebase = false;
+    /// <summary>[17] +4：局部视觉位段（alpha/visible/grayed/touchable/pixelSnap 打包）</summary>
+    public const int NodeColLocalVisual = 17;
+    public const int NodeColLocalVisualSize = 4;
+    public const bool NodeColLocalVisualRebase = false;
+    /// <summary>[18] +4：内容侧表引用（不是节点下标，不回填）</summary>
+    public const int NodeColContentRef = 18;
+    public const int NodeColContentRefSize = 4;
+    public const bool NodeColContentRefRebase = false;
+    /// <summary>[19] +4：状态侧表引用</summary>
+    public const int NodeColStateRef = 19;
+    public const int NodeColStateRefSize = 4;
+    public const bool NodeColStateRefRebase = false;
+    /// <summary>[20] +4：resolved 几何槽引用（实例化批量分配后不再变，不变量 7）</summary>
+    public const int NodeColResolvedRef = 20;
+    public const int NodeColResolvedRefSize = 4;
+    public const bool NodeColResolvedRefRebase = false;
+
     // ---- 编译期断言：字段首尾相接、末字段收口于结构尺寸、位域覆盖全 32 位 ----
     // 不成立即 1/0 → CS0020 编译错（L0 门：错误在跑起来之前死掉）。
     private const int AssertQuadRect = 1 / ((QuadRectOffset + QuadRectSize == QuadUvAOffset) ? 1 : 0);
@@ -295,6 +499,25 @@ public static class AbiLayout
     private const int AssertRadialFillClockwise = 1 / ((RadialFillClockwiseShift + RadialFillClockwiseBits == RadialFillReservedShift) ? 1 : 0);
     private const int AssertRadialFillReserved = 1 / ((RadialFillReservedShift + RadialFillReservedBits == RadialFillAmountShift) ? 1 : 0);
     private const int AssertRadialFillAmount = 1 / ((RadialFillAmountShift + RadialFillAmountBits == 32) ? 1 : 0);
+    private const int AssertFgbHeaderMagic = 1 / ((FgbHeaderMagicOffset + FgbHeaderMagicSize == FgbHeaderFormatVersionOffset) ? 1 : 0);
+    private const int AssertFgbHeaderFormatVersion = 1 / ((FgbHeaderFormatVersionOffset + FgbHeaderFormatVersionSize == FgbHeaderFlagsOffset) ? 1 : 0);
+    private const int AssertFgbHeaderFlags = 1 / ((FgbHeaderFlagsOffset + FgbHeaderFlagsSize == FgbHeaderReserved0Offset) ? 1 : 0);
+    private const int AssertFgbHeaderReserved0 = 1 / ((FgbHeaderReserved0Offset + FgbHeaderReserved0Size == FgbHeaderSelfHashOffset) ? 1 : 0);
+    private const int AssertFgbHeaderSelfHash = 1 / ((FgbHeaderSelfHashOffset + FgbHeaderSelfHashSize == FgbHeaderSourceHashOffset) ? 1 : 0);
+    private const int AssertFgbHeaderSourceHash = 1 / ((FgbHeaderSourceHashOffset + FgbHeaderSourceHashSize == FgbHeaderCombinedRefHashOffset) ? 1 : 0);
+    private const int AssertFgbHeaderCombinedRefHash = 1 / ((FgbHeaderCombinedRefHashOffset + FgbHeaderCombinedRefHashSize == FgbHeaderScaleLevelOffset) ? 1 : 0);
+    private const int AssertFgbHeaderScaleLevel = 1 / ((FgbHeaderScaleLevelOffset + FgbHeaderScaleLevelSize == FgbHeaderBranchIdOffset) ? 1 : 0);
+    private const int AssertFgbHeaderBranchId = 1 / ((FgbHeaderBranchIdOffset + FgbHeaderBranchIdSize == FgbHeaderSectionCountOffset) ? 1 : 0);
+    private const int AssertFgbHeaderSectionCount = 1 / ((FgbHeaderSectionCountOffset + FgbHeaderSectionCountSize == FgbHeaderReserved1Offset) ? 1 : 0);
+    private const int AssertFgbHeaderReserved1 = 1 / ((FgbHeaderReserved1Offset + FgbHeaderReserved1Size == FgbHeaderSize) ? 1 : 0);
+    private const int AssertFgbDirFourcc = 1 / ((FgbDirFourccOffset + FgbDirFourccSize == FgbDirReservedOffset) ? 1 : 0);
+    private const int AssertFgbDirReserved = 1 / ((FgbDirReservedOffset + FgbDirReservedSize == FgbDirOffsetOffset) ? 1 : 0);
+    private const int AssertFgbDirOffset = 1 / ((FgbDirOffsetOffset + FgbDirOffsetSize == FgbDirLengthOffset) ? 1 : 0);
+    private const int AssertFgbDirLength = 1 / ((FgbDirLengthOffset + FgbDirLengthSize == FgbSectionDirEntrySize) ? 1 : 0);
+    private const int AssertFgbFlagLittleEndian = 1 / ((FgbFlagLittleEndianShift + FgbFlagLittleEndianBits == FgbFlagCompressedShift) ? 1 : 0);
+    private const int AssertFgbFlagCompressed = 1 / ((FgbFlagCompressedShift + FgbFlagCompressedBits == FgbFlagReservedShift) ? 1 : 0);
+    private const int AssertFgbFlagReserved = 1 / ((FgbFlagReservedShift + FgbFlagReservedBits == 32) ? 1 : 0);
+    private const int AssertNodeColumnBytes = 1 / ((NodeColParentSize + NodeColFirstChildSize + NodeColNextSibSize + NodeColPrevSibSize + NodeColOwnerInstSize + NodeColLocalIdSize + NodeColTypeIdSize + NodeColPosXSize + NodeColPosYSize + NodeColWidthSize + NodeColHeightSize + NodeColScaleXSize + NodeColScaleYSize + NodeColRotationSize + NodeColSkewSize + NodeColPivotXSize + NodeColPivotYSize + NodeColLocalVisualSize + NodeColContentRefSize + NodeColStateRefSize + NodeColResolvedRefSize == NodeBytesPerNode) ? 1 : 0);
 
     /// <summary>
     /// 定义点交叉校验：本文件常量 vs <see cref="Abi"/> 数据表。null = 一致；
@@ -302,7 +525,7 @@ public static class AbiLayout
     /// </summary>
     public static string? Verify()
     {
-        if (Abi.Scalars.Length != 16) return "Abi.Scalars 表长与生成物不符";
+        if (Abi.Scalars.Length != 19) return "Abi.Scalars 表长与生成物不符";
         if (Abi.Scalars[0].Value != FgbMagic) return "标量 FgbMagic 与生成物不符";
         if (Abi.Scalars[1].Value != FgbFormatVersion) return "标量 FgbFormatVersion 与生成物不符";
         if (Abi.Scalars[2].Value != FgbSectionAlignment) return "标量 FgbSectionAlignment 与生成物不符";
@@ -319,6 +542,9 @@ public static class AbiLayout
         if (Abi.Scalars[13].Value != MaxObservableProps) return "标量 MaxObservableProps 与生成物不符";
         if (Abi.Scalars[14].Value != CommandWaveLimit) return "标量 CommandWaveLimit 与生成物不符";
         if (Abi.Scalars[15].Value != LayoutMicroDrainLimit) return "标量 LayoutMicroDrainLimit 与生成物不符";
+        if (Abi.Scalars[16].Value != FgbHeaderSize) return "标量 FgbHeaderSize 与生成物不符";
+        if (Abi.Scalars[17].Value != FgbSectionDirEntrySize) return "标量 FgbSectionDirEntrySize 与生成物不符";
+        if (Abi.Scalars[18].Value != NodeBytesPerNode) return "标量 NodeBytesPerNode 与生成物不符";
         if (Abi.QuadInstanceFields.Length != 8) return "Abi.QuadInstanceFields 表长与生成物不符";
         if (Abi.QuadInstanceFields[0].Offset != QuadRectOffset || Abi.QuadInstanceFields[0].Size != QuadRectSize) return "QuadRect 偏移/大小与生成物不符";
         if (Abi.QuadInstanceFields[1].Offset != QuadUvAOffset || Abi.QuadInstanceFields[1].Size != QuadUvASize) return "QuadUvA 偏移/大小与生成物不符";
@@ -377,6 +603,68 @@ public static class AbiLayout
         if (Abi.PropIds[13].Id != PropIdRotation) return "PropId Rotation 与生成物不符";
         if (Abi.PropIds[14].Id != PropIdSkew) return "PropId Skew 与生成物不符";
         if (Abi.PropIds[15].Id != PropIdPixelSnap) return "PropId PixelSnap 与生成物不符";
+        if (Abi.FgbHeaderFields.Length != 11) return "Abi.FgbHeaderFields 表长与生成物不符";
+        if (Abi.FgbHeaderFields[0].Offset != FgbHeaderMagicOffset || Abi.FgbHeaderFields[0].Size != FgbHeaderMagicSize) return "FgbHeaderMagic 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[1].Offset != FgbHeaderFormatVersionOffset || Abi.FgbHeaderFields[1].Size != FgbHeaderFormatVersionSize) return "FgbHeaderFormatVersion 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[2].Offset != FgbHeaderFlagsOffset || Abi.FgbHeaderFields[2].Size != FgbHeaderFlagsSize) return "FgbHeaderFlags 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[3].Offset != FgbHeaderReserved0Offset || Abi.FgbHeaderFields[3].Size != FgbHeaderReserved0Size) return "FgbHeaderReserved0 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[4].Offset != FgbHeaderSelfHashOffset || Abi.FgbHeaderFields[4].Size != FgbHeaderSelfHashSize) return "FgbHeaderSelfHash 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[5].Offset != FgbHeaderSourceHashOffset || Abi.FgbHeaderFields[5].Size != FgbHeaderSourceHashSize) return "FgbHeaderSourceHash 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[6].Offset != FgbHeaderCombinedRefHashOffset || Abi.FgbHeaderFields[6].Size != FgbHeaderCombinedRefHashSize) return "FgbHeaderCombinedRefHash 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[7].Offset != FgbHeaderScaleLevelOffset || Abi.FgbHeaderFields[7].Size != FgbHeaderScaleLevelSize) return "FgbHeaderScaleLevel 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[8].Offset != FgbHeaderBranchIdOffset || Abi.FgbHeaderFields[8].Size != FgbHeaderBranchIdSize) return "FgbHeaderBranchId 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[9].Offset != FgbHeaderSectionCountOffset || Abi.FgbHeaderFields[9].Size != FgbHeaderSectionCountSize) return "FgbHeaderSectionCount 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[10].Offset != FgbHeaderReserved1Offset || Abi.FgbHeaderFields[10].Size != FgbHeaderReserved1Size) return "FgbHeaderReserved1 偏移/大小与生成物不符";
+        if (Abi.FgbSectionDirFields.Length != 4) return "Abi.FgbSectionDirFields 表长与生成物不符";
+        if (Abi.FgbSectionDirFields[0].Offset != FgbDirFourccOffset || Abi.FgbSectionDirFields[0].Size != FgbDirFourccSize) return "FgbDirFourcc 偏移/大小与生成物不符";
+        if (Abi.FgbSectionDirFields[1].Offset != FgbDirReservedOffset || Abi.FgbSectionDirFields[1].Size != FgbDirReservedSize) return "FgbDirReserved 偏移/大小与生成物不符";
+        if (Abi.FgbSectionDirFields[2].Offset != FgbDirOffsetOffset || Abi.FgbSectionDirFields[2].Size != FgbDirOffsetSize) return "FgbDirOffset 偏移/大小与生成物不符";
+        if (Abi.FgbSectionDirFields[3].Offset != FgbDirLengthOffset || Abi.FgbSectionDirFields[3].Size != FgbDirLengthSize) return "FgbDirLength 偏移/大小与生成物不符";
+        if (Abi.FgbFlagBits.Length != 3) return "Abi.FgbFlagBits 表长与生成物不符";
+        if (Abi.FgbFlagBits[0].Shift != FgbFlagLittleEndianShift || Abi.FgbFlagBits[0].Width != FgbFlagLittleEndianBits) return "FgbFlagLittleEndian 位域与生成物不符";
+        if (Abi.FgbFlagBits[1].Shift != FgbFlagCompressedShift || Abi.FgbFlagBits[1].Width != FgbFlagCompressedBits) return "FgbFlagCompressed 位域与生成物不符";
+        if (Abi.FgbFlagBits[2].Shift != FgbFlagReservedShift || Abi.FgbFlagBits[2].Width != FgbFlagReservedBits) return "FgbFlagReserved 位域与生成物不符";
+        if (Abi.FgbSectionIds.Length != 18) return "Abi.FgbSectionIds 表长与生成物不符";
+        if (Abi.FgbSectionIds[0].Value != FgbSectionStrt) return "fourcc Strt 与生成物不符";
+        if (Abi.FgbSectionIds[1].Value != FgbSectionLang) return "fourcc Lang 与生成物不符";
+        if (Abi.FgbSectionIds[2].Value != FgbSectionComp) return "fourcc Comp 与生成物不符";
+        if (Abi.FgbSectionIds[3].Value != FgbSectionNode) return "fourcc Node 与生成物不符";
+        if (Abi.FgbSectionIds[4].Value != FgbSectionPlan) return "fourcc Plan 与生成物不符";
+        if (Abi.FgbSectionIds[5].Value != FgbSectionQuad) return "fourcc Quad 与生成物不符";
+        if (Abi.FgbSectionIds[6].Value != FgbSectionSegs) return "fourcc Segs 与生成物不符";
+        if (Abi.FgbSectionIds[7].Value != FgbSectionLeaf) return "fourcc Leaf 与生成物不符";
+        if (Abi.FgbSectionIds[8].Value != FgbSectionClip) return "fourcc Clip 与生成物不符";
+        if (Abi.FgbSectionIds[9].Value != FgbSectionPtch) return "fourcc Ptch 与生成物不符";
+        if (Abi.FgbSectionIds[10].Value != FgbSectionCnst) return "fourcc Cnst 与生成物不符";
+        if (Abi.FgbSectionIds[11].Value != FgbSectionBind) return "fourcc Bind 与生成物不符";
+        if (Abi.FgbSectionIds[12].Value != FgbSectionAnim) return "fourcc Anim 与生成物不符";
+        if (Abi.FgbSectionIds[13].Value != FgbSectionSprt) return "fourcc Sprt 与生成物不符";
+        if (Abi.FgbSectionIds[14].Value != FgbSectionTref) return "fourcc Tref 与生成物不符";
+        if (Abi.FgbSectionIds[15].Value != FgbSectionDeps) return "fourcc Deps 与生成物不符";
+        if (Abi.FgbSectionIds[16].Value != FgbSectionHitt) return "fourcc Hitt 与生成物不符";
+        if (Abi.FgbSectionIds[17].Value != FgbSectionBrch) return "fourcc Brch 与生成物不符";
+        if (Abi.NodeColumns.Length != NodeColumnCount) return "Abi.NodeColumns 表长与生成物不符";
+        if (Abi.NodeColumns[0].ElementSize != NodeColParentSize || Abi.NodeColumns[0].Rebase != NodeColParentRebase) return "NODE 列 Parent 与生成物不符";
+        if (Abi.NodeColumns[1].ElementSize != NodeColFirstChildSize || Abi.NodeColumns[1].Rebase != NodeColFirstChildRebase) return "NODE 列 FirstChild 与生成物不符";
+        if (Abi.NodeColumns[2].ElementSize != NodeColNextSibSize || Abi.NodeColumns[2].Rebase != NodeColNextSibRebase) return "NODE 列 NextSib 与生成物不符";
+        if (Abi.NodeColumns[3].ElementSize != NodeColPrevSibSize || Abi.NodeColumns[3].Rebase != NodeColPrevSibRebase) return "NODE 列 PrevSib 与生成物不符";
+        if (Abi.NodeColumns[4].ElementSize != NodeColOwnerInstSize || Abi.NodeColumns[4].Rebase != NodeColOwnerInstRebase) return "NODE 列 OwnerInst 与生成物不符";
+        if (Abi.NodeColumns[5].ElementSize != NodeColLocalIdSize || Abi.NodeColumns[5].Rebase != NodeColLocalIdRebase) return "NODE 列 LocalId 与生成物不符";
+        if (Abi.NodeColumns[6].ElementSize != NodeColTypeIdSize || Abi.NodeColumns[6].Rebase != NodeColTypeIdRebase) return "NODE 列 TypeId 与生成物不符";
+        if (Abi.NodeColumns[7].ElementSize != NodeColPosXSize || Abi.NodeColumns[7].Rebase != NodeColPosXRebase) return "NODE 列 PosX 与生成物不符";
+        if (Abi.NodeColumns[8].ElementSize != NodeColPosYSize || Abi.NodeColumns[8].Rebase != NodeColPosYRebase) return "NODE 列 PosY 与生成物不符";
+        if (Abi.NodeColumns[9].ElementSize != NodeColWidthSize || Abi.NodeColumns[9].Rebase != NodeColWidthRebase) return "NODE 列 Width 与生成物不符";
+        if (Abi.NodeColumns[10].ElementSize != NodeColHeightSize || Abi.NodeColumns[10].Rebase != NodeColHeightRebase) return "NODE 列 Height 与生成物不符";
+        if (Abi.NodeColumns[11].ElementSize != NodeColScaleXSize || Abi.NodeColumns[11].Rebase != NodeColScaleXRebase) return "NODE 列 ScaleX 与生成物不符";
+        if (Abi.NodeColumns[12].ElementSize != NodeColScaleYSize || Abi.NodeColumns[12].Rebase != NodeColScaleYRebase) return "NODE 列 ScaleY 与生成物不符";
+        if (Abi.NodeColumns[13].ElementSize != NodeColRotationSize || Abi.NodeColumns[13].Rebase != NodeColRotationRebase) return "NODE 列 Rotation 与生成物不符";
+        if (Abi.NodeColumns[14].ElementSize != NodeColSkewSize || Abi.NodeColumns[14].Rebase != NodeColSkewRebase) return "NODE 列 Skew 与生成物不符";
+        if (Abi.NodeColumns[15].ElementSize != NodeColPivotXSize || Abi.NodeColumns[15].Rebase != NodeColPivotXRebase) return "NODE 列 PivotX 与生成物不符";
+        if (Abi.NodeColumns[16].ElementSize != NodeColPivotYSize || Abi.NodeColumns[16].Rebase != NodeColPivotYRebase) return "NODE 列 PivotY 与生成物不符";
+        if (Abi.NodeColumns[17].ElementSize != NodeColLocalVisualSize || Abi.NodeColumns[17].Rebase != NodeColLocalVisualRebase) return "NODE 列 LocalVisual 与生成物不符";
+        if (Abi.NodeColumns[18].ElementSize != NodeColContentRefSize || Abi.NodeColumns[18].Rebase != NodeColContentRefRebase) return "NODE 列 ContentRef 与生成物不符";
+        if (Abi.NodeColumns[19].ElementSize != NodeColStateRefSize || Abi.NodeColumns[19].Rebase != NodeColStateRefRebase) return "NODE 列 StateRef 与生成物不符";
+        if (Abi.NodeColumns[20].ElementSize != NodeColResolvedRefSize || Abi.NodeColumns[20].Rebase != NodeColResolvedRefRebase) return "NODE 列 ResolvedRef 与生成物不符";
         return null;
     }
 }

@@ -29,6 +29,30 @@ public static class FnvHash
         return h;
     }
 
+    // ---- span 入口与显式链（M1-19 追加）----
+    // FGB 头的 selfHash 是「本字段按零参与」的整 blob 散列：校验时不许为把 8 字节临时清零而
+    // 复制整个 blob，改为三段续链（0..字段 | 8 个零 | 字段尾..末尾）。FNV-1a 本就是逐字节
+    // 状态机，续链只是把内部状态摆到签名上——与一次性散列同字节序列必同值（有测试钉住）。
+
+    /// <summary>span 入口：与 <see cref="Hash64(byte[])"/> 同算法同值。</summary>
+    public static ulong Hash64(ReadOnlySpan<byte> bytes) => Hash64Continue(OffsetBasis64, bytes);
+
+    /// <summary>以 h 为当前状态续散列一段字节（起点用 <see cref="OffsetBasis64"/>）。</summary>
+    public static ulong Hash64Continue(ulong h, ReadOnlySpan<byte> bytes)
+    {
+        for (int i = 0; i < bytes.Length; i++)
+            h = (h ^ bytes[i]) * Prime64;
+        return h;
+    }
+
+    /// <summary>续散列 count 个零字节（selfHash 校验的「字段按零参与」段，免临时缓冲）。</summary>
+    public static ulong Hash64ContinueZeros(ulong h, int count)
+    {
+        for (int i = 0; i < count; i++)
+            h = h * Prime64;   // (h ^ 0) == h
+        return h;
+    }
+
     public static uint Hash32(byte[]? bytes) => Hash32(bytes, 0, bytes?.Length ?? 0);
 
     public static uint Hash32(byte[]? bytes, int offset, int count)
