@@ -39,6 +39,10 @@ public static partial class Program
         DownStampSurvivesOutOfFrameWrites();
         DownChannelCascadesAndLandsOnLeaves();
         HiddenSubtreeIsNotDrilled();
+        StructureGateCatchesAStaleHiddenLeaf();
+
+        // 面板根
+        PanelRootLimitsRebuildToItsSubtree();
 
         // P7 五通道端到端
         ContentChannelRewritesInPlace();
@@ -156,9 +160,21 @@ public static partial class Program
             _time = _time.Step(0.016f, 0.016f);
         }
 
+        /// <summary>流结构不变量门（authored 父链判据）在 TickAndCheck 路径上累计的红灯数。</summary>
+        internal int StructureGateFailures;
+        internal string LastStructureGateError = string.Empty;
+
         internal IncrementalGateResult TickAndCheck()
         {
             Tick();
+            // 第三方判据与增量门并跑：增量门的两条腿共享 Extract 与派生列，「两腿共享错误前提」
+            // （2026-08 审计 CRITICAL：隐藏容器后后代叶仍被绘制）在恒等式下是绿的，
+            // 只有独立爬 authored 位的这道门抓得住。红灯累计进 Sound()。
+            if (!StreamStructureGate.Check(Table, Stream, out string structErr))
+            {
+                StructureGateFailures++;
+                LastStructureGateError = structErr;
+            }
             return Gate.Check();
         }
 
@@ -176,10 +192,15 @@ public static partial class Program
         /// </summary>
         internal bool Sound()
         {
-            bool ok = Backend.Violations.Count == 0 && Backend.Gates.Pass && Pipe.DerivedOracleFailures == 0;
+            bool structNow = StreamStructureGate.Check(Table, Stream, out string structErr);
+            bool ok = Backend.Violations.Count == 0 && Backend.Gates.Pass && Pipe.DerivedOracleFailures == 0
+                && structNow && StructureGateFailures == 0;
             if (ok) return true;
             Console.WriteLine($"     [unsound] {Backend.Gates.Describe()} derivedFail={Pipe.DerivedOracleFailures}"
-                + $" badNode={Pipe.DerivedBadIndex} violations={Backend.Violations.Count}");
+                + $" badNode={Pipe.DerivedBadIndex} violations={Backend.Violations.Count}"
+                + $" structGateFail={StructureGateFailures + (structNow ? 0 : 1)}");
+            if (!structNow) Console.WriteLine("     [struct-gate] " + structErr);
+            else if (StructureGateFailures > 0) Console.WriteLine("     [struct-gate] " + LastStructureGateError);
             for (int i = 0; i < Backend.Violations.Count && i < 3; i++)
                 Console.WriteLine("     [violation] " + Backend.Violations[i]);
             return false;
@@ -491,13 +512,63 @@ public static partial class Program
         f.Table.SetVisible(box, false);          // 隐藏容器：整支出流（数量变化 ⇒ 整编）
         IncrementalGateResult hide = f.TickAndCheck();
         long skips = f.Inval.LastFrame.HiddenSkips;
+        // 2026-08 审计（断言改强的那条）：这里从前只断言重新显示后的 LeafCount==1，隐藏那一步的
+        // 叶数从未被断言——Extract 逐点判陈旧 worldVisual 时 leaves=1 照画、增量门照绿（两腿共读
+        // 同一份陈旧列），本用例守着「整支出流」的注释却放行了整支照画。隐藏后必须 0 叶 0 quad。
+        bool leftStream = f.Stream.LeafCount == 0 && f.Stream.QuadCount == 0;
 
         f.Table.SetVisible(box, true);           // 重新显示：Visible 排水补戳，整支回流
         IncrementalGateResult show = f.TickAndCheck();
 
-        Check("P6 下行: 隐藏子树免下钻（契约），重新显示补戳后整支回流且门仍绿",
-            hide.Pass && show.Pass && skips >= 1
+        Check("P6 下行: 隐藏子树免下钻（契约），隐藏一步整支出流（0 叶），重新显示补戳后整支回流且门仍绿",
+            hide.Pass && leftStream && show.Pass && skips >= 1
             && f.Stream.LeafCount == 1 && f.Sound());
+    }
+
+    /// <summary>
+    /// 流结构不变量门的负例：制造一次真正的漏标（摘钩子后隐藏容器——Mark 丢失，流不重编，
+    /// 叶成为被隐藏祖先罩住的幽灵），authored 父链判据必须当场红。它是独立于增量门两条腿的
+    /// 第三方判据：两腿共享 Extract 时，这个形状恒等式恒真，只有本门抓得住。
+    /// </summary>
+    private static void StructureGateCatchesAStaleHiddenLeaf()
+    {
+        var f = new PipeFixture();
+        NodeHandle box = f.Box(0f, 0f, 50f, 50f);
+        f.Leaf(PipeSolid(0), 0f, 0f, 10f, 10f, box);
+        f.Tick();
+        bool green = StreamStructureGate.Check(f.Table, f.Stream, out _);
+
+        f.Inval.Detach();                        // 漏标的机器形态：写发生、Mark 不发生
+        f.Table.SetVisible(box, false);
+        f.Tick();                                // 整帧照跑：无脏可排，流原样留着那个叶
+
+        bool red = !StreamStructureGate.Check(f.Table, f.Stream, out string err);
+        Check($"门 · 流结构不变量（负例）: 漏标的隐藏容器 ⇒ 残叶被 authored 父链判据抓住 {err}",
+            green && red && f.Stream.LeafCount == 1);
+    }
+
+    // ── 面板根 ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 2026-08 审计 MEDIUM：Drain/InPanel 按面板子树过滤脏句柄，Rebuild 却沿 GetPaintOrder()
+    /// 整树发射——每条「面板流」装整棵树。单面板时增量门的 oracle Extract 同样整树发射，
+    /// 恒等式看不出来（两腿共享前提的又一例），必须用「兄弟子树不入流」直接断言。
+    /// </summary>
+    private static void PanelRootLimitsRebuildToItsSubtree()
+    {
+        var f = new PipeFixture();
+        NodeHandle mine = f.Box(0f, 0f, 100f, 100f);
+        NodeHandle a = f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, mine);
+        NodeHandle other = f.Box(200f, 0f, 100f, 100f);
+        f.Leaf(PipeSolid(1), 0f, 0f, 10f, 10f, other);
+        f.Leaf(PipeSolid(1), 20f, 0f, 10f, 10f, other);
+        f.Pipe.Extract.PanelRoot = mine;
+        IncrementalGateResult r = f.TickAndCheck();
+
+        // IncrementalGate.Check 已同步 PanelRoot（两腿同面板），门下仍须绿。
+        Check("面板根: Rebuild 只发射 PanelRoot 子树（兄弟子树的叶不进本流），增量门下仍绿",
+            f.Stream.LeafCount == 1 && f.Stream.Leaf(0).Node.Equals(a)
+            && r.Pass && f.Sound());
     }
 
     // ── P7：五通道端到端 ───────────────────────────────────────────────────

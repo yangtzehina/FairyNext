@@ -232,6 +232,14 @@ public sealed class StreamDrain : IChannelDrain
     }
 
     // ── Color / Visible：从基色重算、隐显 ───────────────────────────────────
+    //
+    // 这两条原位路径读 WorldVisualAt——它与 Extract 曾经的「逐点判 wv」不是同一个坑（2026-08 审计
+    // 复核过的论证，修 Extract 时一并验证）：被隐藏祖先罩住的叶的 wv 确实合法陈旧（「隐藏子树
+    // 免下钻」），但 Extract 修正后那样的叶**根本不在流里**——LeafOf 返回 -1，两条路径在第一行
+    // 就走人（Color 直接返回，Visible 升级 Structure），陈旧的 wv 到不了 RecolorLeaf。
+    // 对**在流里**的叶，「无隐藏祖先」由 Extract 的进流条件保证，其 wv 的新鲜由重新显示的补戳
+    // （DownVisible）与派生列神谕兜底。唯一的瞬态：同帧里祖先刚隐藏 + 本叶又带 Color 脏时，
+    // Recolor 可能先按陈旧 wv 写一次——同帧 P7 收尾的升级整编随即把整支叶摘出流，终态不受影响。
 
     private void DrainColor(NodeHandle node)
     {

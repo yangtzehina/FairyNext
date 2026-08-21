@@ -19,11 +19,16 @@ namespace FairyNext.Core.Rendering;
 // 这也是「同一棵树两次 Extract 逐字节相等」能成为一条门的原因。
 //
 // ── 本包与文档的一处偏离（已回写 architecture.md 实现期补充）─────────────────
-// 工作包写「可见性与 clip 域从 worldVisual 取」。可见性确实从 worldVisual 取；**clip 域不能**：
-// 域 id 是 ClipBook 的分配序产物，而整流重编第一件事就是 ClipBook.Reset()——
-// P6 写进 worldVisual 的那个 id 描述的是**上一次分配**，重编后立刻陈旧。
-// 因此 Extract 沿同一趟 paintOrder 自己推导域（DFS 前序保证父先于子，一个数组就够），
-// worldVisual 的 clip 域字段留给 M1-14 的**增量**路径（那时 id 与重编同源）。
+// 工作包写「可见性与 clip 域从 worldVisual 取」。**两者都不能**，病因各异：
+//  · clip 域：域 id 是 ClipBook 的分配序产物，而整流重编第一件事就是 ClipBook.Reset()——
+//    P6 写进 worldVisual 的那个 id 描述的是**上一次分配**，重编后立刻陈旧；
+//  · 进/出流的可见性判定：Invalidation.DrainDown 的「隐藏子树免下钻」（不变量 13）让隐藏
+//    子树**后代**的 worldVisual 合法陈旧（仍报 visible）。逐点判 wv 会把被隐藏祖先罩住的叶
+//    照画出来，而增量门的两条腿读的是同一份陈旧列——恒等式恒真，门抓不到（2026-08 审计 CRITICAL）。
+// 因此 Extract 沿同一趟 paintOrder 自己传播两者（DFS 前序保证父先于子，各一个按下标索引的数组）：
+// 进流条件 = 自己 authored 可见 **且** 父链无隐藏者。worldVisual 只供 α/置灰/visible 载荷取值——
+// 进了流的叶按契约没有隐藏祖先，其 wv 的新鲜由重新显示的补戳（DownVisible/RestampOnShow）
+// 与派生列神谕（DerivedMatchesFullRecompute）保证。
 // ============================================================================
 
 /// <summary>内容记录的种类（封闭集）。</summary>
@@ -159,7 +164,7 @@ public readonly struct ExtractReport
     public readonly int Runs;
     /// <summary>段数。</summary>
     public readonly int Segments;
-    /// <summary>因 worldVisual 不可见被跳过的节点数。</summary>
+    /// <summary>因不可见被跳过的节点数（自己 authored 隐藏，或父链上有隐藏者）。</summary>
     public readonly int HiddenSkipped;
     /// <summary>因整只落在裁剪域外被跳过的叶数。</summary>
     public readonly int ClipCulled;
@@ -213,6 +218,7 @@ public sealed class Extract : IChannelDrain
     private uint[] _colorScratch = new uint[LeafEmitter.Scale9MaxQuads];
 
     private int[] _clipOf = Array.Empty<int>();   // 下标 = 节点下标；值 = 该节点所在裁剪域条目
+    private bool[] _hiddenOf = Array.Empty<bool>(); // 下标 = 节点下标；值 = 自己或某个祖先 authored 隐藏
     private int[] _ownedSlots = Array.Empty<int>();
     private int _ownedSlotCount;
 
@@ -292,7 +298,7 @@ public sealed class Extract : IChannelDrain
     }
 
     /// <summary>
-    /// 整流重编一次：清流 → 沿 paintOrder 发射 → 相邻性排序 → 切段 → 收口。
+    /// 整流重编一次：清流 → 沿 paintOrder 的 **PanelRoot 子树区间**发射 → 相邻性排序 → 切段 → 收口。
     ///
     /// **前置条件：paintOrder 与派生列已定形**（P6 的 ApplyStructure + world/worldVisual 一遍算）。
     /// 相位机里这是自然满足的（P7 在 P6 之后）；离线路径（FgbCompiler = 无头运行时、测试夹具）
@@ -313,7 +319,30 @@ public sealed class Extract : IChannelDrain
         ReadOnlySpan<int> order = _table.GetPaintOrder();
         EnsureClipMap();
 
-        for (int k = 0; k < order.Length; k++)
+        // 只发射 PanelRoot 子树：paintOrder 是 DFS 前序 ⇒ 子树是连续区间（切片表 O(1)）。
+        // Drain/InPanel 按面板过滤脏句柄、Rebuild 却整树发射，等于每条「面板流」装整棵树——
+        // 单面板时增量门的 oracle Extract 同样整树发射所以看不出来，M1-15 多面板一来就是重复绘制。
+        // 面板根解析不到（已死/脱链）⇒ 空面板：清完流就收口，不发射任何东西。
+        int panelStart = 0, panelEnd = 0;
+        if (_table.TryGetSubtreeRange(PanelRoot, out int rangeStart, out int rangeCount))
+        {
+            panelStart = rangeStart;
+            panelEnd = rangeStart + rangeCount;
+        }
+
+        // 面板根之上的祖先链照样罩可见性（面板不是可见性边界；M1-15 若裁决面板自带可见性语义，
+        // 改这个种子即可）。clip 不从面板外进来：域 id 是本流分配序的产物，面板外的域在本流不存在。
+        if (panelEnd > panelStart)
+        {
+            uint above = _table.ParentIndex((uint)order[panelStart]);
+            if (above != NodeTable.NoIndex)
+            {
+                _clipOf[above] = ClipBook.NoneEntry;
+                _hiddenOf[above] = AncestorChainHidden(above);
+            }
+        }
+
+        for (int k = panelStart; k < panelEnd; k++)
         {
             uint idx = (uint)order[k];
             if (!_table.IsIndexAlive(idx)) continue;
@@ -321,10 +350,14 @@ public sealed class Extract : IChannelDrain
             uint wv = _table.WorldVisualAt(idx);
             int parentClip = ParentClip(idx);
 
-            // 不可见 = 整支不进流（worldVisual 的 visible 按 AND 级联 ⇒ 后代也一定不可见，
-            // 逐点判即等价于整棵子树跳过）。「隐显」这条通道管的是**已在流里**的叶原位清零，
-            // 数量变化按五通道表升级 Structure —— 也就是回到这里再编一次。
-            if ((wv & Visual.Visible) == 0)
+            // 不可见 = 整支不进流。判据是 **authored 可见位沿 paintOrder 父先于子传播**
+            // （与 _clipOf 完全同一条路子），不是 worldVisual：「隐藏子树免下钻」让隐藏子树
+            // 后代的 wv 合法陈旧（仍报 visible），逐点判 wv 会把罩在隐藏祖先下的叶照画出来。
+            // 「隐显」这条通道管的是**已在流里**的叶原位清零，数量变化按五通道表升级
+            // Structure —— 也就是回到这里再编一次。
+            bool hidden = ParentHidden(idx) || !_table.IsIndexVisible(idx);
+            _hiddenOf[idx] = hidden;
+            if (hidden)
             {
                 _clipOf[idx] = parentClip;
                 _hiddenSkipped++;
@@ -604,12 +637,29 @@ public sealed class Extract : IChannelDrain
     {
         if (_clipOf.Length < _table.Capacity) _clipOf = new int[_table.Capacity];
         else Array.Clear(_clipOf, 0, _clipOf.Length);
+        if (_hiddenOf.Length < _table.Capacity) _hiddenOf = new bool[_table.Capacity];
+        else Array.Clear(_hiddenOf, 0, _hiddenOf.Length);
     }
 
     private int ParentClip(uint idx)
     {
         uint p = _table.ParentIndex(idx);
         return p == NodeTable.NoIndex ? ClipBook.NoneEntry : _clipOf[p];
+    }
+
+    /// <summary>父链传播的隐藏位（面板根的父由 Rebuild 用 <see cref="AncestorChainHidden"/> 预种）。</summary>
+    private bool ParentHidden(uint idx)
+    {
+        uint p = _table.ParentIndex(idx);
+        return p != NodeTable.NoIndex && _hiddenOf[p];
+    }
+
+    /// <summary>从 <paramref name="idx"/> 沿祖先链（含自己）爬 authored 可见位——只在面板根的父上跑一次。</summary>
+    private bool AncestorChainHidden(uint idx)
+    {
+        for (uint a = idx; a != NodeTable.NoIndex; a = _table.ParentIndex(a))
+            if (!_table.IsIndexVisible(a)) return true;
+        return false;
     }
 
     private int PushClip(NodeHandle node, in ClipShape shape, int parent,
