@@ -588,6 +588,17 @@ public enum DegradeKind : byte
     /// 沿用父窗口 = 裁得更粗但不画错，与「clip 超限 → 父窗口降级」同一条阶梯。
     /// </summary>
     ClipCrossFrameToParent = 10,
+    /// <summary>
+    /// 非有限尺寸的叶（±∞ 宽高）→ 拒发（M1-14b 审计补）。旧判据 <c>!(w &gt; 0)</c> 只吃
+    /// 零/负/NaN，<c>+∞ &gt; 0</c> 为真照发——rect 含 ∞ 的实例把 AABB/域外剔除/相邻性
+    /// 排序全部毒化。拒发 + 计数，与槽荒「不画并计数」同一条阶梯。
+    /// </summary>
+    NonFiniteLeafSize = 11,
+    /// <summary>
+    /// 九宫格平铺（tileGridIndice/scaleByTile）在 M2 之前无发射表达 → 拒发（M1-14b 审计补，
+    /// plan.md M2-14 登记实现）。画成拉伸是「近似」，机制 4 禁止；拒发有声，资产一进来就能数到。
+    /// </summary>
+    Scale9TileUnimplemented = 12,
 }
 
 /// <summary>

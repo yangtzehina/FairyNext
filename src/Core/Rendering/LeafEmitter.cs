@@ -40,6 +40,13 @@ public struct SpriteRegion : IEquatable<SpriteRegion>
     public float SourceHeight;
     /// <summary>九宫格（源像素坐标 x,y,w,h）；<c>w &lt;= 0 || h &lt;= 0</c> = 无九宫格。</summary>
     public Vector4 Grid;
+    /// <summary>
+    /// 九宫格平铺位掩码（= fork 的 <c>tileGridIndice</c>：九格中哪些格平铺而不拉伸；0 = 全拉伸）。
+    /// 发射器在 M2 之前对平铺**无表达**——见 <see cref="HasTiling"/>。
+    /// </summary>
+    public int TileGridIndice;
+    /// <summary>整图平铺（= fork 的 <c>scaleByTile</c>）。同上，M2 之前无表达。</summary>
+    public bool ScaleByTile;
 
     /// <summary>纯色叶用的退化区域：1×1 白（后端给 texSlot 绑 1×1 白，采样点无所谓）。</summary>
     public static SpriteRegion Solid => new SpriteRegion
@@ -80,6 +87,14 @@ public struct SpriteRegion : IEquatable<SpriteRegion>
         && Grid.x >= 0f && Grid.y >= 0f
         && Grid.x + Grid.z <= SourceWidth && Grid.y + Grid.w <= SourceHeight;
 
+    /// <summary>
+    /// 是否声明了平铺（整图 scaleByTile，或九宫格某些格 tileGridIndice）。
+    /// 平铺的发射是 M2 的活（plan.md M2-14 登记）；在那之前按机制 4「要么正确、要么明确
+    /// 不显示并计数」**拒发**——把平铺画成拉伸是「近似」，正是阶梯禁止的那一级。
+    /// 计数的落点在 Extract（<c>DegradeKind.Scale9TileUnimplemented</c>），发射器保持纯函数。
+    /// </summary>
+    public readonly bool HasTiling => ScaleByTile || (TileGridIndice != 0 && HasGrid);
+
     /// <summary>左边宽（源像素）。</summary>
     public readonly float BorderLeft => Grid.x;
     /// <summary>右边宽（源像素）。</summary>
@@ -92,12 +107,14 @@ public struct SpriteRegion : IEquatable<SpriteRegion>
     /// <inheritdoc/>
     public readonly bool Equals(SpriteRegion other) =>
         Uv == other.Uv && Grid == other.Grid
-        && BitEquals.Eq(SourceWidth, other.SourceWidth) && BitEquals.Eq(SourceHeight, other.SourceHeight);
+        && BitEquals.Eq(SourceWidth, other.SourceWidth) && BitEquals.Eq(SourceHeight, other.SourceHeight)
+        && TileGridIndice == other.TileGridIndice && ScaleByTile == other.ScaleByTile;
 
     /// <inheritdoc/>
     public readonly override bool Equals(object? obj) => obj is SpriteRegion r && Equals(r);
     /// <inheritdoc/>
-    public readonly override int GetHashCode() => HashCode.Combine(Uv, SourceWidth, SourceHeight, Grid);
+    public readonly override int GetHashCode() =>
+        HashCode.Combine(Uv, SourceWidth, SourceHeight, Grid, TileGridIndice, ScaleByTile);
     /// <inheritdoc/>
     public readonly override string ToString() =>
         HasGrid ? $"region uv={Uv} src={SourceWidth}×{SourceHeight} grid={Grid}" : $"region uv={Uv}";
@@ -189,15 +206,33 @@ public static class LeafEmitter
         return n;
     }
 
+    /// <summary>
+    /// 尺寸判据（全发射入口共用一个定义点）：正、有限才发。
+    /// <c>!(w &gt; 0)</c> 吃掉零/负/NaN；**+∞ 必须单列**——M1-14b 审计实测旧判据把
+    /// <c>+∞ &gt; 0</c> 放行，一个 rect 含 ∞ 的实例会把 AABB/剔除/排序全部毒化。
+    /// </summary>
+    private static bool SizeEmittable(float width, float height) =>
+        width > 0f && height > 0f && !float.IsInfinity(width) && !float.IsInfinity(height);
+
+    /// <summary>
+    /// 本 spec 是否声明了发射器无表达的平铺（M2 前拒发的判据；Extract 用同一判据计
+    /// <c>DegradeKind.Scale9TileUnimplemented</c>，两处必须字面同源）。
+    /// 填充优先于九宫格（fork <c>Image.OnPopulateMesh</c> 同序：fillMethod 一设，
+    /// scale9/tile 整个不看），所以带填充的 spec 不算平铺。
+    /// </summary>
+    public static bool IsUnsupportedTiling(in LeafSpec spec) =>
+        spec.Fill.Method == FillMethod.None && spec.Region.HasTiling;
+
     private static int EmitGeometry(in LeafSpec spec, float width, float height, Span<QuadInstance> quads)
     {
         // 零宽/零高/非有限尺寸的叶发射 0 个实例。留一个 size 0 的 quad 也画不出像素，
         // 但它会占一个实例、进上传区间、进规范化哈希——「不可见」应该等于「不存在」。
-        if (!(width > 0f) || !(height > 0f)) return 0;
+        if (!SizeEmittable(width, height)) return 0;
         if (quads.Length == 0) return 0;
 
         FillMethod method = spec.Fill.Method;
         if (method != FillMethod.None) return EmitFilled(in spec, width, height, quads);
+        if (spec.Region.HasTiling) return 0;         // 平铺无表达 ⇒ 拒发（degrade 计数在 Extract）
         if (spec.Region.HasGrid) return EmitScale9(in spec.Region, width, height, quads);
         return EmitPlain(in spec.Region, width, height, quads);
     }
@@ -207,7 +242,7 @@ public static class LeafEmitter
     /// <summary>整块区域一个 quad（纯色与单图共用；最简路径）。</summary>
     public static int EmitPlain(in SpriteRegion region, float width, float height, Span<QuadInstance> quads)
     {
-        if (!(width > 0f) || !(height > 0f) || quads.Length == 0) return 0;
+        if (!SizeEmittable(width, height) || quads.Length == 0) return 0;
         quads[0] = MakeQuad(0f, 0f, width, height,
             region.Uv.x, region.Uv.y, region.Uv.z, region.Uv.w);
         return 1;
@@ -229,7 +264,7 @@ public static class LeafEmitter
     public static int EmitScale9(in SpriteRegion region, float width, float height, Span<QuadInstance> quads)
     {
         if (!region.HasGrid) return EmitPlain(in region, width, height, quads);
-        if (!(width > 0f) || !(height > 0f) || quads.Length == 0) return 0;
+        if (!SizeEmittable(width, height) || quads.Length == 0) return 0;
 
         Span<float> xs = stackalloc float[4];
         Span<float> ys = stackalloc float[4];

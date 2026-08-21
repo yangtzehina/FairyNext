@@ -27,6 +27,14 @@ public static partial class Program
         Scale9NarrowBoxSquashesBordersWithoutNaN();
         Scale9RejectsOutOfBoundsGrid();
 
+        // 审计补（M1-14b）：挤压支路 golden + 发射器门缺口
+        Scale9SquashGoldenNarrowWidth();
+        Scale9SquashGoldenShortHeight();
+        Scale9SquashGoldenBothAxesAsymmetric();
+        NegativeGridOriginIsRejected();
+        NonFiniteSizeEmitsNothingOnEveryPath();
+        TilingSpecRefusesToEmit();
+
         // 填充：线性走几何、径向走 ABI
         LinearFillCropsRectAndUv();
         LinearFillFromRightTakesTheFarEnd();
@@ -34,6 +42,7 @@ public static partial class Program
         RadialFullAmountIsPlainQuad();
 
         // 径向填充的位布局（对生成常量回读）
+        RadialCenterAndStartTurnsCoverAllOrigins();
         RadialAuxPacksThroughGeneratedShifts();
         RadialAuxRoundTrips();
         RadialExtraIsThePolarForm();
@@ -185,6 +194,135 @@ public static partial class Program
             finite && n == 1 && LeRectIs(in q[0], 0f, 0f, 10f, 10f));
     }
 
+    /// <summary>逐字节比一个 quad（golden 用：期望值全部精确可表示，不设 eps）。</summary>
+    private static bool LeExactly(in QuadInstance q, float x, float y, float w, float h,
+        float u0, float v0, float u1, float v1) =>
+        q.Rect.x == x && q.Rect.y == y && q.Rect.z == w && q.Rect.w == h
+        && q.UvA.x == u0 && q.UvA.y == v0 && q.UvA.z == u1 && q.UvA.w == v0
+        && q.UvB.x == u0 && q.UvB.y == v1 && q.UvB.z == u1 && q.UvB.w == v1;
+
+    /// <summary>整条发射结果对 golden 表逐字节比（数量与每片的 rect/UV 一次钉死）。</summary>
+    private static bool LeGolden(in LeafSpec spec, float w, float h, float[][] expect)
+    {
+        int n = LeEmit(in spec, w, h, out QuadInstance[] q);
+        if (n != expect.Length) return false;
+        for (int i = 0; i < n; i++)
+        {
+            float[] e = expect[i];
+            if (!LeExactly(in q[i], e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7])) return false;
+        }
+        return true;
+    }
+
+    // ── 挤压支路 golden（M1-14b 审计补）────────────────────────────────────
+    //
+    // 变异史（2026-08 审计）：SplitAxis 的「框放不下两条边框」支路曾有两个真 bug 变异
+    // 静默通过——旧的唯一挤压用例右边框为 0，`cut = length·head/(head+tail)` 在 tail=0 时
+    // 对「head 换 tail」「Min(head, length)」一类错法输出**巧合相同**，且那条用例不查 UV；
+    // 「中格必须零宽」这类断言也杀不死后者（错的 cut 同样让中格零宽）。
+    // 三条 golden 把 rect 与 UV 全数组逐字节钉死（期望值全为精确可表示的浮点），巧合失效。
+    // 夹具：LeSliced = UV [0.25,0.75]²、源 64²、边框 L16/R16/T8/B8，每源像素 UV = 1/128。
+
+    private static void Scale9SquashGoldenNarrowWidth()
+    {
+        // 框宽 24 < 左右边框和 32 ⇒ 两边框按比例压至 12、中列零宽；行向放得下照旧（8|44|8）。
+        LeafSpec spec = LeafSpec.Image(new TexId(1), LeSliced());
+        Check("发射: 挤压 golden ①（宽 24 < 边框和 32：边框压至 12/12，中列不发射）",
+            LeGolden(in spec, 24f, 60f, new[]
+            {
+                new[] { 0f, 0f, 12f, 8f, 0.25f, 0.25f, 0.375f, 0.3125f },
+                new[] { 12f, 0f, 12f, 8f, 0.625f, 0.25f, 0.75f, 0.3125f },
+                new[] { 0f, 8f, 12f, 44f, 0.25f, 0.3125f, 0.375f, 0.6875f },
+                new[] { 12f, 8f, 12f, 44f, 0.625f, 0.3125f, 0.75f, 0.6875f },
+                new[] { 0f, 52f, 12f, 8f, 0.25f, 0.6875f, 0.375f, 0.75f },
+                new[] { 12f, 52f, 12f, 8f, 0.625f, 0.6875f, 0.75f, 0.75f },
+            }));
+    }
+
+    private static void Scale9SquashGoldenShortHeight()
+    {
+        // 框高 12 < 上下边框和 16 ⇒ 上下边框压至 6/6、中行零高；列向照旧（16|68|16）。
+        LeafSpec spec = LeafSpec.Image(new TexId(1), LeSliced());
+        Check("发射: 挤压 golden ②（高 12 < 边框和 16：边框压至 6/6，中行不发射）",
+            LeGolden(in spec, 100f, 12f, new[]
+            {
+                new[] { 0f, 0f, 16f, 6f, 0.25f, 0.25f, 0.375f, 0.3125f },
+                new[] { 16f, 0f, 68f, 6f, 0.375f, 0.25f, 0.625f, 0.3125f },
+                new[] { 84f, 0f, 16f, 6f, 0.625f, 0.25f, 0.75f, 0.3125f },
+                new[] { 0f, 6f, 16f, 6f, 0.25f, 0.6875f, 0.375f, 0.75f },
+                new[] { 16f, 6f, 68f, 6f, 0.375f, 0.6875f, 0.625f, 0.75f },
+                new[] { 84f, 6f, 16f, 6f, 0.625f, 0.6875f, 0.75f, 0.75f },
+            }));
+    }
+
+    private static void Scale9SquashGoldenBothAxesAsymmetric()
+    {
+        // 非对称边框（L24/R8、T8/B24）+ 双向挤压：x 向 cut = 16·24/32 = 12（左吃 3/4），
+        // y 向 cut = 20·8/32 = 5（上吃 1/4）。对称夹具杀不死「head 换 tail」——这条杀得死。
+        var region = SpriteRegion.Sliced(new Vector4(0.25f, 0.25f, 0.75f, 0.75f), 64f, 64f,
+            new Vector4(24f, 8f, 32f, 32f));
+        LeafSpec spec = LeafSpec.Image(new TexId(1), region);
+        Check("发射: 挤压 golden ③（非对称边框双向挤压：比例分割 12|4 与 5|15）",
+            LeGolden(in spec, 16f, 20f, new[]
+            {
+                new[] { 0f, 0f, 12f, 5f, 0.25f, 0.25f, 0.4375f, 0.3125f },
+                new[] { 12f, 0f, 4f, 5f, 0.6875f, 0.25f, 0.75f, 0.3125f },
+                new[] { 0f, 5f, 12f, 15f, 0.25f, 0.5625f, 0.4375f, 0.75f },
+                new[] { 12f, 5f, 4f, 15f, 0.6875f, 0.5625f, 0.75f, 0.75f },
+            }));
+    }
+
+    private static void NegativeGridOriginIsRejected()
+    {
+        // 负的 grid 原点（损坏/手写资产）：HasGrid 的下界检查判「无九宫格」。若删掉
+        // Grid.x/y >= 0 两项，BorderLeft = -8 会进 UV 表：us[1] = uv.x - 8px 落到邻图元上。
+        var region = SpriteRegion.Sliced(new Vector4(0.25f, 0.25f, 0.75f, 0.75f), 64f, 64f,
+            new Vector4(-8f, -8f, 32f, 32f));
+        LeafSpec spec = LeafSpec.Image(new TexId(1), region);
+        int n = LeEmit(in spec, 100f, 60f, out QuadInstance[] q);
+        Check("发射: 负 grid 原点被判「无九宫格」（不产落在邻图元上的 UV）",
+            !region.HasGrid && n == 1 && LeRectIs(in q[0], 0f, 0f, 100f, 60f)
+            && LeUvIs(in q[0], 0.25f, 0.25f, 0.75f, 0.75f));
+    }
+
+    private static void NonFiniteSizeEmitsNothingOnEveryPath()
+    {
+        // 审计实测：旧判据 `!(w > 0f)` 只吃零/负/NaN，`+∞ > 0` 为真照发。四条路径同门。
+        LeafSpec plain = LeafSpec.Image(new TexId(1), LeRegion());
+        int a = LeEmit(in plain, float.PositiveInfinity, 40f, out _);
+        int b = LeEmit(in plain, 40f, float.PositiveInfinity, out _);
+        LeafSpec sliced = LeafSpec.Image(new TexId(1), LeSliced());
+        int c = LeEmit(in sliced, float.PositiveInfinity, float.PositiveInfinity, out _);
+        LeafSpec filled = LeafSpec.Image(new TexId(1), LeRegion());
+        filled.Fill = RadialFillParams.Of(FillMethod.Horizontal, (byte)OriginHorizontal.Left, 0.5f);
+        int d = LeEmit(in filled, float.PositiveInfinity, 20f, out _);
+        Check("发射: 非有限尺寸拒发 0 实例（整图/九宫/填充同门；`+∞ > 0` 曾放行）",
+            a == 0 && b == 0 && c == 0 && d == 0);
+    }
+
+    private static void TilingSpecRefusesToEmit()
+    {
+        // 平铺（scaleByTile / tileGridIndice）M2 前无表达：按机制 4 拒发而不是画成拉伸。
+        var byTile = SpriteRegion.Full(new Vector4(0f, 0f, 1f, 1f), 64f, 64f);
+        byTile.ScaleByTile = true;
+        LeafSpec s1 = LeafSpec.Image(new TexId(1), byTile);
+        int a = LeEmit(in s1, 100f, 60f, out _);
+
+        var tiledGrid = SpriteRegion.Sliced(new Vector4(0f, 0f, 1f, 1f), 64f, 64f,
+            new Vector4(16f, 16f, 32f, 32f));
+        tiledGrid.TileGridIndice = 1 << 4;           // 中格平铺
+        LeafSpec s2 = LeafSpec.Image(new TexId(1), tiledGrid);
+        int b = LeEmit(in s2, 100f, 60f, out _);
+
+        // fork 优先序：fillMethod 一设，scale9/tile 整个不看 ⇒ 带填充的平铺 spec 照常发射。
+        LeafSpec s3 = LeafSpec.Image(new TexId(1), tiledGrid);
+        s3.Fill = RadialFillParams.Of(FillMethod.Radial360, (byte)Origin360.Top, 0.5f);
+        int c = LeEmit(in s3, 100f, 60f, out _);
+
+        Check("发射: 平铺声明拒发 0 实例（画成拉伸是「近似」；填充优先序下不拒）",
+            s1.Region.HasTiling && s2.Region.HasTiling && a == 0 && b == 0 && c == 1);
+    }
+
     private static void Scale9RejectsOutOfBoundsGrid()
     {
         // 格子越出源框：fork 会产出 UV 落到邻图元上的边片（图集里最难查的一类花屏）。
@@ -240,6 +378,37 @@ public static partial class Program
         Check("填充: 满格径向 = 整图普通实例（不付 shader 分支的钱）",
             n == 1 && q[0].Flags == 0u && q[0].Aux == 0u && q[0].Extra == Vector4.zero
             && LeRectIs(in q[0], 0f, 0f, 40f, 40f));
+    }
+
+    private static void RadialCenterAndStartTurnsCoverAllOrigins()
+    {
+        // 12 组 (method, origin) 的 golden 表（M1-14b 审计补：此前只钉了 4 组）。
+        // 编号 = fork FieldTypes.cs = .fui 字节值——错一组，旧资源那一档就整体画错。
+        // 期望值按 RadialFill.StartTurns 文档里的规则独立推导：center = pivot 归一化坐标；
+        // start = 从 pivot 出发沿顺时针遇到的第一条覆盖边（turns，0 = +x，y 向下故正向 = 顺时针）；
+        // 360° 的起始边 = origin 指的方向。PackExtra 对每组再对拍一次求值形态。
+        bool ok = true;
+        void Row(FillMethod m, byte o, float cx, float cy, float start)
+        {
+            Vector2 c = RadialFill.Center(m, o);
+            if (c.x != cx || c.y != cy || RadialFill.StartTurns(m, o) != start) ok = false;
+            var p = RadialFillParams.Of(m, o, 0.5f);
+            Vector4 e = RadialFill.PackExtra(in p);
+            if (e.x != cx || e.y != cy || e.z != start || !(e.w > 0f)) ok = false;
+        }
+        Row(FillMethod.Radial90, (byte)Origin90.TopLeft, 0f, 0f, 0f);
+        Row(FillMethod.Radial90, (byte)Origin90.TopRight, 1f, 0f, 0.25f);
+        Row(FillMethod.Radial90, (byte)Origin90.BottomLeft, 0f, 1f, 0.75f);
+        Row(FillMethod.Radial90, (byte)Origin90.BottomRight, 1f, 1f, 0.5f);
+        Row(FillMethod.Radial180, (byte)Origin180.Top, 0.5f, 0f, 0f);
+        Row(FillMethod.Radial180, (byte)Origin180.Bottom, 0.5f, 1f, 0.5f);
+        Row(FillMethod.Radial180, (byte)Origin180.Left, 0f, 0.5f, 0.75f);
+        Row(FillMethod.Radial180, (byte)Origin180.Right, 1f, 0.5f, 0.25f);
+        Row(FillMethod.Radial360, (byte)Origin360.Top, 0.5f, 0.5f, 0.75f);
+        Row(FillMethod.Radial360, (byte)Origin360.Bottom, 0.5f, 0.5f, 0.25f);
+        Row(FillMethod.Radial360, (byte)Origin360.Left, 0.5f, 0.5f, 0.5f);
+        Row(FillMethod.Radial360, (byte)Origin360.Right, 0.5f, 0.5f, 0f);
+        Check("填充: center/startTurns 的 12 组 (method,origin) golden 表盖全（编号 = fork = .fui 字节）", ok);
     }
 
     private static void RadialAuxPacksThroughGeneratedShifts()

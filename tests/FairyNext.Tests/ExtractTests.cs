@@ -30,6 +30,9 @@ public static partial class Program
         WorldTransformIsBakedIntoRect();
         RotatedLeafRidesASlot();
         NegativeScaleMirrorsUv();
+        NegativeYScaleMirrorsUvRows();
+        NonFiniteLeafIsRefusedWithADegrade();
+        TilingLeafIsRefusedWithADegrade();
         IslandCutsARunAndSortingStaysInside();
         RebuildIsBitIdentical();
         RebuildOnTheSameStreamIsStable();
@@ -254,6 +257,65 @@ public static partial class Program
             q.Rect.x == -10f && q.Rect.z == 10f
             && q.UvA.x == 1f && q.UvA.z == 0f && q.UvB.x == 1f && q.UvB.z == 0f
             && q.UvA.y == 0f && q.UvB.y == 1f);
+    }
+
+    private static void NegativeYScaleMirrorsUvRows()
+    {
+        // scaleY=-1：rect 只记 min 角与 size，上下翻转必须由 UvA/UvB **整行换位**承担。
+        // 审计变异（M1-14b）：把 BakeToSlot 的 m11<0 支路整段删掉，全套仍绿——上一条用例
+        // 只钉了 scaleX 的四角换位。这里把 Y 镜像与双负（= 180° 旋转等价）都逐字节钉死。
+        var f = new ExFixture();
+        NodeHandle flip = f.Box(0f, 0f, 20f, 20f, default);
+        f.Table.SetScale(flip, 1f, -1f);
+        f.Leaf(LeafSpec.Image(new TexId(1), SpriteRegion.Full(new Vector4(0f, 0f, 1f, 1f), 4f, 4f)),
+            0f, 0f, 10f, 10f, flip);
+        f.Rebuild();
+        QuadInstance q = f.Stream.Quads[0];
+        bool yOnly = q.Rect.x == 0f && q.Rect.y == -10f && q.Rect.z == 10f && q.Rect.w == 10f
+            && q.UvA.x == 0f && q.UvA.y == 1f && q.UvA.z == 1f && q.UvA.w == 1f
+            && q.UvB.x == 0f && q.UvB.y == 0f && q.UvB.z == 1f && q.UvB.w == 0f;
+
+        var g = new ExFixture();
+        NodeHandle both = g.Box(0f, 0f, 20f, 20f, default);
+        g.Table.SetScale(both, -1f, -1f);
+        g.Leaf(LeafSpec.Image(new TexId(1), SpriteRegion.Full(new Vector4(0f, 0f, 1f, 1f), 4f, 4f)),
+            0f, 0f, 10f, 10f, both);
+        g.Rebuild();
+        QuadInstance p = g.Stream.Quads[0];
+        bool bothAxes = p.Rect.x == -10f && p.Rect.y == -10f && p.Rect.z == 10f && p.Rect.w == 10f
+            && p.UvA.x == 1f && p.UvA.y == 1f && p.UvA.z == 0f && p.UvA.w == 1f
+            && p.UvB.x == 1f && p.UvB.y == 0f && p.UvB.z == 0f && p.UvB.w == 0f;
+
+        Check("Extract: 负 Y 缩放的 UV 换行镜像（scaleY=-1 上下翻；双负 = 180° 等价）",
+            yOnly && bothAxes);
+    }
+
+    private static void NonFiniteLeafIsRefusedWithADegrade()
+    {
+        // +∞ 宽高（布局除零一类的上游事故）：旧判据 `!(w > 0f)` 放行 → RootAabb/剔除/排序
+        // 全被 NaN 毒化。M1-14b 起在 AppendPending 拒发并计 NonFiniteLeafSize（有声原则）。
+        var f = new ExFixture();
+        f.Leaf(ExSolid(1), 0f, 0f, float.PositiveInfinity, 10f);
+        f.Leaf(ExSolid(2), 0f, 20f, 10f, 10f);       // 对照叶：同树的正常叶照常进流
+        f.Rebuild();
+        Check("Extract: 非有限尺寸叶拒发并计 NonFiniteLeafSize（对照叶照常进流）",
+            f.Stream.LeafCount == 1 && f.Stream.QuadCount == 1
+            && f.Stream.Degrades.CountOf(DegradeKind.NonFiniteLeafSize) == 1);
+    }
+
+    private static void TilingLeafIsRefusedWithADegrade()
+    {
+        // 平铺声明（tileGridIndice）：M2 前发射器无表达，拒发并计 Scale9TileUnimplemented
+        // ——资产一进来就能在账上数到「有多少叶在等 M2 的平铺」，而不是静默画成拉伸。
+        var region = SpriteRegion.Sliced(new Vector4(0f, 0f, 1f, 1f), 16f, 16f,
+            new Vector4(4f, 4f, 8f, 8f));
+        region.TileGridIndice = 1 << 4;
+        var f = new ExFixture();
+        f.Leaf(LeafSpec.Image(new TexId(1), region), 0f, 0f, 40f, 40f);
+        f.Leaf(ExSolid(2), 0f, 60f, 10f, 10f);       // 对照叶
+        f.Rebuild();
+        Check("Extract: 平铺声明叶拒发并计 Scale9TileUnimplemented（去向 M2-14，见 plan.md）",
+            f.Stream.LeafCount == 1 && f.Stream.Degrades.CountOf(DegradeKind.Scale9TileUnimplemented) == 1);
     }
 
     // ── 孤岛与 run ─────────────────────────────────────────────────────────

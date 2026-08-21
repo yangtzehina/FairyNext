@@ -47,7 +47,7 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 - **M1-14 P6/P7/P8 排水打通**（~1500 行）：paintOrder 切片拼接+structEpoch、world/worldVisual 一遍两算、五通道消化、P8 合并区间上传+序派生。门：**增量正确性门（L2）、零脏帧空转收据上线**。
 
 ### W8-W9 后端与布局
-- **M1-15 Unity 顶点流后端 + local package**（~1500 行）：unity/ 引 src/、段 MeshRenderer 四角展开、UInt32 顶点属性、y 翻转唯一点、fence 回收（≤4）。
+- **M1-15 Unity 顶点流后端 + local package**（~1500 行）：unity/ 引 src/、段 MeshRenderer 四角展开、UInt32 顶点属性、y 翻转唯一点、fence 回收（≤4）。验收项（2026-08 审计遗留）：① **上传字节神谕**——增量门比的是流的 CPU 镜像，P8 合并区间真正交给后端的字节区间没有第二条腿；本包须对拍「增量帧的上传区间并集 ⊇ 两帧流镜像的差异字节」并断言区间贴点（mock 已有 80B 粒度断言，Unity 侧要有等价物）。② **多面板 Attach 语义**——内核相位钩子单占（14b-3 起 Attach 硬独占、跨实例 throw），多面板共享内核的扇出件在本包定形（一个扇出器持多条流，或明文「一内核一面板」写进公开 API 注释并测死）。
 - **M1-16 布局：约束图 + LinearLayout**（~1800 行）：ConstraintOp/FanOut 拓扑序单遍、offset 捕获、resolved 槽唯一写者、P5 四层骨架、parentUsesSize、受控窗（≤3 轮兜底）。门：**P5 幂等断言、布局差分神谕（L2）上线**（随机手建树，不等 FGB）。
 
 ### W9-W10 文本与 FGB
@@ -57,11 +57,11 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 
 ### W10-W11 编译器与事件
 - **M1-20 FgbCompiler = 无头运行时**（~2500 行，3 会话，关键路径汇合点）：.fui→建树→跑 P5+度量→Extract→冻结各段；relation→EdgeFollow+分层拒环+拓扑排序；pivotAsAnchor 编译期消灭；GGroup 真节点化；localId 映射；canonical 去重；内存计划打印。门：**约束环拒绝（L0）、编译产物 golden（L1）、等价性金样（编译 Extract=运行时 Extract 逐字节）上线**。
-- **M1-21 事件：命中与派发**（~1500 行 + PixelHitTest 82 shim）：HitMode 列、迭代命中（上帧序、local⊗slotMatrix、clip 剪枝、1bit 位图）、EventId<T>/ListenerBlock/链快照、downChain click、CaptureTouch/monitor、EventCtx ref struct。
+- **M1-21 事件：命中与派发**（~1500 行 + PixelHitTest 82 shim）：HitMode 列、迭代命中（上帧序、local⊗slotMatrix、clip 剪枝、1bit 位图）、EventId<T>/ListenerBlock/链快照、downChain click、CaptureTouch/monitor、EventCtx ref struct。验收项（2026-08 审计遗留）：① **DownLayer 通道要有首个 Mark 者与覆盖**——该通道在 M1-14 阶段无人 Mark（level/sortingOrder 类属性未接），排水代码是零覆盖死路径；本包接入首个写者时必须补「DownLayer 级联落到命中/绘制序」的行为用例。② **clip 剪枝消费 Extract 的 `_clipOf` 数据面，不得读 worldVisual**——其 clip 域 16 位已裁决为保留段恒零、取值宏已删（14b-4 死字段裁决，见 architecture.md 平面三回写）；命中测试的 clip 语义与渲染同源，须有用例钉死两侧同判。
 
 ### W11-W12 装载与孤岛
 - **M1-22 装载三操作 + 同步实例化**（~1500 行）：验证/视图/绑定（PTCH 回填/DEPS/纹理懒装载）、LoadReport、降级二分（结构性拒载 vs 哈希降 Extract）、PLAN 实例化（顶层块+嵌套 slab+memcpy+arm-not-mount）、Pool 雏形。门：**fuzz 门转常设**。
-- **M1-23 孤岛②③④**（~1200 行）：AddIsland/IIslandContent（含 StillAnimating）、visual 并入下行、②自定义材质（clip include/scissor 降级）、③外部原生（SortingGroup 对齐 run 序、Spine kind）、④stencil 括号。验收项（2026-08 审计遗留）：`AnyIslandAnimating` 是零脏帧短路的第三前提，M1-14 阶段恒 false 无门——本包必须补「活孤岛自报 StillAnimating ⇒ stats.Dirty 为真、presents 照涨」的正例与「自报静止 ⇒ 短路恢复」的收据断言，否则第三前提仍是无人执法的纸面条款。
+- **M1-23 孤岛②③④**（~1200 行）：AddIsland/IIslandContent（含 StillAnimating）、visual 并入下行、②自定义材质（clip include/scissor 降级）、③外部原生（SortingGroup 对齐 run 序、Spine kind）、④stencil 括号。验收项（2026-08 审计遗留）：① `AnyIslandAnimating` 是零脏帧短路的第三前提，M1-14 阶段恒 false 无门——本包必须补「活孤岛自报 StillAnimating ⇒ stats.Dirty 为真、presents 照涨」的正例与「自报静止 ⇒ 短路恢复」的收据断言，否则第三前提仍是无人执法的纸面条款。② **孤岛表进规范形**——`CanonicalStream` 的首用序重编号只盖槽表与 clip 表，孤岛挂载记录不在规范化范围内；本包落地 AddIsland 时必须把孤岛表纳入同一套「分配序非身份」的重编号（否则增量门与 Trace 哈希对孤岛记录要么漏比要么把分配序漂移误报为差异）。
 
 ### W12-W13 验证与工具
 - **M1-24 输入带 + Trace + 回放**（~1000 行）：InputTape RLE 常开环（派生数据不入带/未录轨钉中性值）、Manual 回放、Trace 逐帧流哈希+FirstDivergentFrame、ReplayBundle。门：**回放确定性门（L3）上线**。
@@ -79,7 +79,7 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 
 **阶段三 文本完整化**：M2-08 富文本 IR（UBBParser 直搬 + Html 1450 移植 + ~600；内联对象=真子节点）→ M2-09 曲线字形源移植+预烘+font-map（~1800；GPU 段参考重写、per-size 路由、3500 常用字预烘、CJK 淡入）→ M2-10 文本输入+IME+焦点（~2000；gap buffer+OpLog、CommitTrigger 三选一、CompositionPatch 不写文档、ITextInputHost 查询面、AxisDelta 归一）。
 
-**阶段四 收口**：M2-11 异步实例化（~600；同一 PLAN 前缀切片，异步/同步产物逐字节等价）→ M2-12 滤镜 RT 域+fadeGroup（~1500；事件驱动 recapture、离屏 pass 前置、Unity 沿用 CaptureCamera）→ M2-13 chaos+会话金样+诊断完整化（~1200；门：**chaos 门、金样门（L3）上线**；六诊断面统一 HUD）→ **M2-14 像素门全矩阵**（M2 收口件：24 关系×3 pivot×2 percent + transition/滚动/文本 + 降级各级专属用例 + 字形换代帧单列 + oracle 已知错豁免；风险#1 收口）→ M2-15 M2 集成验收（金样首批入库、延迟表全表）→ M2-16 WebGL2 预研收尾（副轨，为 M3 Buffer 立项供数）。
+**阶段四 收口**：M2-11 异步实例化（~600；同一 PLAN 前缀切片，异步/同步产物逐字节等价）→ M2-12 滤镜 RT 域+fadeGroup（~1500；事件驱动 recapture、离屏 pass 前置、Unity 沿用 CaptureCamera）→ M2-13 chaos+会话金样+诊断完整化（~1200；门：**chaos 门、金样门（L3）上线**；六诊断面统一 HUD）→ **M2-14 像素门全矩阵**（M2 收口件：24 关系×3 pivot×2 percent + transition/滚动/文本 + 降级各级专属用例 + 字形换代帧单列 + oracle 已知错豁免；风险#1 收口。含 2026-08 审计登记：**九宫格平铺发射落地**——tileGridIndice/scaleByTile 在 M1 发射器无表达、按有声原则拒发并计 `DegradeKind.Scale9TileUnimplemented`（LeafEmitter/Extract 有注释指到此处）；本包前须实现平铺发射并把语料上该计数清零，平铺像素用例进矩阵）→ M2-15 M2 集成验收（金样首批入库、延迟表全表）→ M2-16 WebGL2 预研收尾（副轨，为 M3 Buffer 立项供数）。
 
 ## 4. M3 生产化（8 包）
 

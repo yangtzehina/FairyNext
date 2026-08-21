@@ -39,6 +39,7 @@ public static partial class Program
         // P6 下行通道
         DownStampSurvivesOutOfFrameWrites();
         DownChannelCascadesAndLandsOnLeaves();
+        CascadeDownMarksAreAttributedToCascadeDown();
         HiddenSubtreeIsNotDrilled();
         StructureGateCatchesAStaleHiddenLeaf();
         HiddenEditsLandAfterShow();
@@ -516,6 +517,26 @@ public static partial class Program
             before == 0xFF204080u && after == 0x80204080u
             && f.Pipe.DownVisits > downBefore
             && Visual.Alpha(f.Table.WorldVisual(leaf)) == 128
+            && r.Pass && f.Sound());
+    }
+
+    private static void CascadeDownMarksAreAttributedToCascadeDown()
+    {
+        // 级联落叶（DownVisit 把下行变化交回上行通道）必须归因 CascadeDown——架构明文
+        // （时间宪法 M1-14 补充：InvalidateReason 第八值）说记成 UserWrite 会让「谁失效了我」
+        // 在最常见的 α 级联上说谎。审计变异（M1-14b）：把 RenderPipeline.DownVisit 的归因
+        // 改回 UserWrite，整套仍绿——诊断账此前没有一条断言分辨这两个理由。
+        var f = new PipeFixture();
+        NodeHandle box = f.Box(0f, 0f, 100f, 100f);
+        f.Leaf(PipeSolid(0, 0xFF204080u), 10f, 10f, 20f, 20f, box);
+        f.TickAndCheck();
+
+        f.Table.SetAlpha(box, 0.5f);             // 这一笔是 UserWrite；级联落叶那一笔不是
+        IncrementalGateResult r = f.TickAndCheck();
+        InvalidationDiag d = f.Inval.LastFrame;
+        Check("P6 下行: 级联落叶的 Mark 归因 CascadeDown（SetAlpha 自己那笔仍是 UserWrite）",
+            d.MarksOf(InvalidateReason.CascadeDown) == 1
+            && d.MarksOf(InvalidateReason.UserWrite) == 1
             && r.Pass && f.Sound());
     }
 

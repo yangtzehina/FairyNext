@@ -431,10 +431,26 @@ public sealed class Extract : IChannelDrain
         if (!ownsClip && clip != ClipBook.NoneEntry) _stream.Clips.Inherit(clip);
     }
 
-    /// <returns>true = 这个叶真的进了流（false = 落位失败或整只在域外）。</returns>
+    /// <returns>true = 这个叶真的进了流（false = 落位失败、整只在域外或拒发）。</returns>
     private bool AppendPending(NodeHandle node, in LeafSpec spec, int clip,
         in Affine2D world, bool axisAligned, float w, float h, uint worldVisual)
     {
+        // 两条拒发都在落位之前判（拒发的叶不该占槽），判据与 LeafEmitter 字面同源。
+        // ① 非有限尺寸：发射器会发 0 实例，但 RootAabb/ClipCulls 在它前面跑，∞ 会先把
+        //    排序判据毒成 NaN——拒发必须发生在任何几何运算之前，并且**有声**（机制 4）。
+        if (!float.IsFinite(w) || !float.IsFinite(h))
+        {
+            _stream.Degrades.Report(DegradeKind.NonFiniteLeafSize, $"叶 {node} 尺寸非有限（{w}×{h}）——拒发");
+            return false;
+        }
+        // ② 平铺声明：M2 前无表达，拒发 + 计数（去向见 DegradeKind.Scale9TileUnimplemented）。
+        if (LeafEmitter.IsUnsupportedTiling(in spec))
+        {
+            _stream.Degrades.Report(DegradeKind.Scale9TileUnimplemented,
+                $"叶 {node} 声明九宫格平铺（tile={spec.Region.TileGridIndice} byTile={spec.Region.ScaleByTile}）——M2 前拒发");
+            return false;
+        }
+
         if (!Place(node, in world, axisAligned, out int slot, out Affine2D toSlot))
         {
             _unplaceable++;

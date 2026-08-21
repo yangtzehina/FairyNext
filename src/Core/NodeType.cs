@@ -31,7 +31,11 @@ public static class NodeType
 /// localVisual 是 authored 真值列（用户/gear/timeline 写），worldVisual 是 P6 派生列，
 /// **两者共用本位域**——级联只改值不改布局，渲染平面读任一列都用同一组取值宏。
 ///
-/// pad:u16 段在 worldVisual 里是 clip 域 id；在 localVisual 里保留写零。
+/// pad:u16 段在两列里都是**保留段，恒零**（M1-14b 死字段裁决）：它曾按平面一注定为
+/// worldVisual 的 clip 域 id，但域 id 是 ClipBook 分配序的产物、整编即陈旧，无论整编
+/// 还是增量路径都不能落列——clip 域的唯一数据面是 Extract 的 <c>_clipOf</c>（M1-13 裁决）。
+/// 位布局保留不重排（重排打生成器与既有测试），访问器已删：想读 clip 域的代码在编译期
+/// 就该被迫走 Extract，而不是从这里读一个恒 0 的数。
 /// 节点生命周期位**不在这里**（见 <c>SlotFlags</c> 的文件头注释：实例化 memcpy 会覆写本列）。
 /// </summary>
 public static class Visual
@@ -50,10 +54,8 @@ public static class Visual
     /// <summary>像素对齐（**不级联**：渲染平面读局部位，父节点的对齐意愿不传染子节点）。</summary>
     public const uint PixelSnap = 1u << 11;
 
-    /// <summary>clip 域 id 位段起点（仅 worldVisual 使用；渲染平面 M1-11 接管其分配）。</summary>
-    public const int ClipDomainShift = 16;
-    /// <summary>clip 域 id 掩码。</summary>
-    public const uint ClipDomainMask = 0xFFFFu << ClipDomainShift;
+    /// <summary>保留段掩码（pad:u16，恒零；写非零 = 协议违约）。不设公开取值宏——见类型注释。</summary>
+    private const uint ReservedMask = 0xFFFFu << 16;
 
     /// <summary>新建节点的 localVisual 初值：不透明 + 可见 + 可命中。</summary>
     public const uint DefaultLocal = AlphaMask | Visible | Touchable;
@@ -64,18 +66,16 @@ public static class Visual
     /// <summary>换 alpha（u8），其余位不动。</summary>
     public static uint WithAlpha(uint v, byte a) => (v & ~AlphaMask) | a;
 
-    /// <summary>取 clip 域 id（仅 worldVisual 有意义）。</summary>
-    public static ushort ClipDomain(uint v) => (ushort)((v & ClipDomainMask) >> ClipDomainShift);
-
     /// <summary>
     /// 级联一层（机制⑥ 的 worldVisual 算法，唯一实现点）：
     /// α = u8 积（<c>(pa·ca + 127)/255</c>，定点四舍五入，跨平台位确定）、
-    /// visible/touchable = AND、grayed = OR、clip 域 = 继承父（域切换由渲染平面写）。
+    /// visible/touchable = AND、grayed = OR、保留段原样带过（恒零，带过是为了
+    /// 「级联不发明位」——它对本段既不清也不造）。
     /// </summary>
     public static uint Cascade(uint parentWorld, uint local)
     {
         uint a = (uint)((Alpha(parentWorld) * Alpha(local) + 127) / 255);
-        uint flags = parentWorld & ClipDomainMask;
+        uint flags = parentWorld & ReservedMask;
         if ((parentWorld & Visible) != 0 && (local & Visible) != 0) flags |= Visible;
         if ((parentWorld & Touchable) != 0 && (local & Touchable) != 0) flags |= Touchable;
         if (((parentWorld | local) & Grayed) != 0) flags |= Grayed;
