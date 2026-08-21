@@ -50,6 +50,10 @@ public static partial class Program
                              // 独立神谕）/ cmap format 4+12 直映 / CFF 拒载有声 / 三本账
                              // append-only / 页淘汰双门 / generation 仅 P2 / 双半区独立，
                              // 用例在 TextGlyphTests.cs（partial）
+        TextCoreSuite();     // M1-18 TextCore 无状态排版：断行/对齐/ellipsis golden + 两把尺 +
+                             // kerning 求和 + 文本·不变量 1/2/3（跨 DPI 位等/双跑/arena 复用）+
+                             // P5 度量层（autoSize/回流）+ 三级惰性与 slack 档 + Pending α=0 +
+                             // 页引用纪律 + 核按钮端到端，用例在 TextCoreTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

@@ -121,6 +121,24 @@ public struct SpriteRegion : IEquatable<SpriteRegion>
 }
 
 /// <summary>
+/// 文本 quad 发射器（架构接缝原文：<c>ITextQuadEmitter.Emit(...) → int</c>，**仅 P7 可调**；
+/// 文本渲染适配层仅持本接口——类型上无孤岛注册接口可调，文本永不孤岛）。
+///
+/// 实现（M1-18 的 TextSystem）在调用窗口内必须是**帧内纯函数**：同 (textRef, width, height)
+/// 重复调用产出逐位相同的 quad——增量正确性门的神谕腿会在帧尾对同一个叶再发射一遍，
+/// 任何帧内不幂等（内部计数外泄进字节、非确定迭代序）都会把门打红。
+/// 引用登记（AddPageRef/ReleasePageRef）因此必须按**集合调和**实现（重复发射零副作用）。
+/// </summary>
+public interface ITextQuadEmitter
+{
+    /// <summary>
+    /// 发射一个文本叶：按当前排版产物写 quad 几何/UV 与**未乘 α 基色**（Pending 字形 α=0 占位）。
+    /// route 三分量照叶发射器纪律不写（流盖写）。返回写入的实例数。
+    /// </summary>
+    int Emit(uint textRef, float width, float height, Span<QuadInstance> quads, Span<uint> baseColors);
+}
+
+/// <summary>
 /// 一个叶要发射什么（内容描述；资产平面 M1-20/M1-22 的产物，运行期只读）。
 /// 它**不含**位置与大小——那是树的 resolved 几何，由 Extract 在遍历时取。
 /// </summary>
@@ -140,6 +158,15 @@ public struct LeafSpec
     public int SlackHint;
     /// <summary>填充参数（<see cref="FillMethod.None"/> = 整图）。</summary>
     public RadialFillParams Fill;
+    /// <summary>
+    /// 文本发射器（null = 非文本叶）。非空时 <see cref="LeafEmitter.Emit"/> 整臂改走
+    /// <see cref="ITextQuadEmitter.Emit"/>，<see cref="LeafEmitter.MaxQuads"/> 以
+    /// <see cref="SlackHint"/> 为容量上界——文本侧（M1-18 的 TextSystem）维护
+    /// SlackHint = 可发射字形数上界 + 1（省略号位），于是 MaxQuads 仍不依赖宽高。
+    /// </summary>
+    public ITextQuadEmitter? Text;
+    /// <summary>文本引用 id（<see cref="Text"/> 非空时有效；发射器自己的账本键，流不解释）。</summary>
+    public uint TextRef;
 
     /// <summary>纯色叶（无纹理，一个 quad）。</summary>
     public static LeafSpec Solid(uint baseColor, BlendClass blend = BlendClass.Normal) => new LeafSpec
@@ -179,9 +206,12 @@ public static class LeafEmitter
     /// <summary>
     /// 本 spec 最多会发射多少个 quad（调用方按此备 scratch；**不依赖宽高**，
     /// 于是缓冲尺寸在遍历前就能定，遍历中不会因为某个叶大一点而重新分配）。
+    /// 文本叶的上界 = <see cref="LeafSpec.SlackHint"/>（文本侧维护为「可发射字形数上界 + 1」，
+    /// 断行只换行不换字形数，宽高照旧不进上界）。
     /// </summary>
     public static int MaxQuads(in LeafSpec spec) =>
-        spec.Fill.Method == FillMethod.None && spec.Region.HasGrid ? Scale9MaxQuads : 1;
+        spec.Text != null ? (spec.SlackHint > 0 ? spec.SlackHint : 1)
+        : spec.Fill.Method == FillMethod.None && spec.Region.HasGrid ? Scale9MaxQuads : 1;
 
     /// <summary>
     /// 发射一个叶（统一入口）。返回写进 <paramref name="quads"/> 的实例数（可能是 0）。
@@ -198,6 +228,20 @@ public static class LeafEmitter
     public static int Emit(in LeafSpec spec, float width, float height,
         Span<QuadInstance> quads, Span<uint> baseColors)
     {
+        // 文本臂：几何/UV/基色全部由文本发射器产（Pending 字形 α=0 占位也在其内）。
+        // 尺寸判据与其余臂字面同源——零/负/∞ 的文本框同样发 0 实例。
+        if (spec.Text != null)
+        {
+            if (!SizeEmittable(width, height) || quads.Length == 0) return 0;
+            int t = spec.Text.Emit(spec.TextRef, width, height, quads, baseColors);
+            if (t < 0 || t > quads.Length || t > baseColors.Length)
+            {
+                UiAssert.That(false, "文本发射器返回越界实例数 " + t + "（容量 " + quads.Length + "）");
+                return 0;
+            }
+            return t;
+        }
+
         int n = EmitGeometry(in spec, width, height, quads);
         UiAssert.That(baseColors.Length >= n,
             "baseColor 输出 span 短于发射出的实例数（颜色纯函数的定义域必须一一对应）");

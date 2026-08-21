@@ -21,6 +21,8 @@ public sealed class LayoutStats
 {
     /// <summary>求过值的约束算子数（会话累计）。</summary>
     public long OpsEvaluated;
+    /// <summary>度量层调用文本度量的次数（M1-18；会话累计，零脏帧不该涨）。</summary>
+    public long MeasureRuns;
     /// <summary>内容包围重算次数（parentUsesSize 容器，会话累计）。</summary>
     public long BoundsRecomputed;
     /// <summary>流式布局摆放的子节点数（会话累计）。</summary>
@@ -131,6 +133,18 @@ public sealed class LayoutEngine : IChannelDrain
 
     private readonly List<LinearBox> _boxes = new List<LinearBox>();          // 按 Depth 降序（包围层自底向上）
     private readonly Dictionary<uint, LinearBox> _boxByIndex = new Dictionary<uint, LinearBox>();
+
+    // ── 度量节点（M1-18：P5 四层的第一层）───────────────────────────────────
+    private sealed class MeasuredEntry
+    {
+        internal NodeHandle Node;
+        internal bool AutoW, AutoH;
+        internal bool Pending;
+    }
+
+    private readonly Dictionary<uint, MeasuredEntry> _measured = new Dictionary<uint, MeasuredEntry>();
+    private readonly List<uint> _measuredOrder = new List<uint>();   // 登记序遍历（求值序确定性）
+    private uint _measuringIdx = NodeTable.NoIndex;                  // 防自触发（度量写自己的尺寸不再置脏自己）
 
     // ── 槽与归属 ────────────────────────────────────────────────────────────
     private readonly Dictionary<uint, byte> _ownMask = new Dictionary<uint, byte>();  // 布局内部的分量归属
@@ -314,6 +328,43 @@ public sealed class LayoutEngine : IChannelDrain
         _boxByIndex.Add(idx, box);
     }
 
+    /// <summary>
+    /// 登记一个**被度量**节点（autoSize 文本，M1-18）：声明其 auto 轴的尺寸归 P5 度量层所有
+    /// （resolved 槽 + LayoutOwn 尺寸位在此布防，与 <see cref="Arm"/>/<see cref="RegisterLinear"/>
+    /// 同形态）。每轮 P5 的**第一层**对脏了的度量节点调 <see cref="TextMeasure"/>：
+    /// autoWidth 用不限宽自然尺、否则按当前 resolved 宽量折行尺——两把尺同源
+    /// （<c>ITextMeasure</c> 的实现自己保证，接缝只传 availWidth）。
+    /// 度量结果经 <see cref="NodeTable.SetResolved"/> 写回（唯一写者纪律不破），
+    /// 宽度被约束/流式层改动时该节点自动重新入量——「文本尺寸→约束→回改宽度」的回路
+    /// 由既有受控窗兜底（不变量 9 的 ≤3 轮微排水，超限有声）。
+    /// </summary>
+    public void RegisterMeasured(NodeHandle node, bool autoWidth, bool autoHeight)
+    {
+        if (!autoWidth && !autoHeight)
+        {
+            UiAssert.That(false, "RegisterMeasured 两轴都不 auto——没有度量归属的登记没有意义");
+            return;
+        }
+        if (!_table.TryResolve(node, out uint idx))
+        {
+            UiAssert.That(false, "RegisterMeasured：句柄已失效");
+            return;
+        }
+        UiAssert.That(!_measured.ContainsKey(idx), "RegisterMeasured：节点重复登记");
+        if (_measured.ContainsKey(idx)) return;
+        EnsureSlot(node, idx);
+        MergeOwn(idx, (byte)((autoWidth ? LayoutOwn.SizeX : 0) | (autoHeight ? LayoutOwn.SizeY : 0)));
+        _measured.Add(idx, new MeasuredEntry { Node = node, AutoW = autoWidth, AutoH = autoHeight, Pending = true });
+        _measuredOrder.Add(idx);
+    }
+
+    /// <summary>摘除度量登记（槽与归属位不回收——resolved 槽 append-only）。</summary>
+    public void UnregisterMeasured(NodeHandle node)
+    {
+        if (!_table.TryResolve(node, out uint idx)) return;
+        if (_measured.Remove(idx)) _measuredOrder.Remove(idx);
+    }
+
     private void EnsureSlot(NodeHandle h, uint idx)
     {
         if (_slotSet.Contains(idx)) return;
@@ -359,7 +410,8 @@ public sealed class LayoutEngine : IChannelDrain
     {
         Stats.BeginFrame();
 
-        // 层 1：度量（M1-18 进驻；TextMeasure==null 时空层，Text 通道由文本系统自己消费）。
+        // 层 1：度量在 RunPass 里跑（M1-18 进驻：每轮四层严格串行，度量→包围→约束→流式；
+        // TextMeasure==null 时空层）。Text 通道由文本系统自己消费——这里只收 Layout 侧的脏。
 
         // authored 变化收集：Layout 排水缓冲 + Transform 队列窥视（消费权归 P7，只借事实）。
         int peeked = CopyPeek(Ch.Transform);
@@ -410,6 +462,8 @@ public sealed class LayoutEngine : IChannelDrain
     /// </summary>
     private void AuthoredChanged(NodeHandle h, uint idx)
     {
+        // 度量节点的 re-pending 不在这里：本方法尾部的保守 Touch(sized:true) 已覆盖
+        // （杀变异实测：此处单独置 Pending 是 Touch 的真子集，独立的一行是死冗余）。
         _ownMask.TryGetValue(idx, out byte own);
         if (_slotSet.Contains(idx))
         {
@@ -449,6 +503,10 @@ public sealed class LayoutEngine : IChannelDrain
     private void Touch(uint idx, bool moved, bool sized)
     {
         if (!moved && !sized) return;
+        // 度量节点被**别人**改了尺寸（约束/流式写宽）⇒ 重新入量（autoHeight 折行尺依赖宽）。
+        // _measuringIdx 防自触发：度量自己写回的尺寸不再置脏自己，一轮即收敛。
+        if (sized && idx != _measuringIdx && _measured.TryGetValue(idx, out MeasuredEntry? me))
+            me.Pending = true;
         if (idx != TestMuteFanOutIndex && _members.TryGetValue(idx, out List<Member>? list))
         {
             for (int m = 0; m < list.Count; m++)
@@ -497,6 +555,11 @@ public sealed class LayoutEngine : IChannelDrain
 
     private bool HasWork()
     {
+        if (TextMeasure != null)
+        {
+            for (int k = 0; k < _measuredOrder.Count; k++)
+                if (_measured.TryGetValue(_measuredOrder[k], out MeasuredEntry? me) && me.Pending) return true;
+        }
         for (int i = 0; i < _instances.Count; i++)
         {
             ulong[] words = _instances[i].DirtyOps;
@@ -511,12 +574,46 @@ public sealed class LayoutEngine : IChannelDrain
         return false;
     }
 
-    /// <summary>一遍三层（full=true：全量遍历、不碰脏簿记——幂等门与差分全量腿共用）。</summary>
+    /// <summary>一遍四层（full=true：全量遍历、不碰脏簿记——幂等门与差分全量腿共用）。</summary>
     private void RunPass(bool full)
     {
+        MeasurePass(full);
         BoundsPass(full);
         ConstraintPass(full);
         FlowPass(full);
+    }
+
+    /// <summary>
+    /// 层 1：度量（只量不出网格；quad 归 P7）。full 腿量全部登记节点——度量是
+    /// (文本, 样式, availWidth) 的纯函数，同宽重量零变化，幂等门与差分腿因此可复用本层。
+    /// 旁缓冲（差分全量腿）下 availWidth 读的是旁缓冲的宽、写也只进旁缓冲——神谕不写活列。
+    /// </summary>
+    private void MeasurePass(bool full)
+    {
+        ITextMeasure? measure = TextMeasure;
+        if (measure == null || _measuredOrder.Count == 0) return;
+        for (int k = 0; k < _measuredOrder.Count; k++)
+        {
+            uint idx = _measuredOrder[k];
+            if (!_measured.TryGetValue(idx, out MeasuredEntry? e)) continue;
+            if (!full)
+            {
+                if (!e.Pending) continue;
+                e.Pending = false;
+            }
+            if (!_table.TryResolve(e.Node, out uint cur) || cur != idx) continue;
+            GeomOf(idx, out float x, out float y, out float w, out float h);
+            Vector2 sz = measure.Measure(e.Node, e.AutoW ? float.PositiveInfinity : w);
+            float nw = e.AutoW ? sz.x : w;
+            float nh = e.AutoH ? sz.y : h;
+            // 哨兵必须罩住 Touch（不只 WriteGeom）：Touch 里那道 re-pending 门才是它要防的
+            // 自触发点——早复位曾让哨兵形同虚设，每次真变化白量一轮（杀变异分析揪出的死守卫）。
+            _measuringIdx = idx;
+            WriteGeom(idx, x, y, nw, nh, out bool moved, out bool sized);
+            if (!full) Stats.MeasureRuns++;           // 只记增量工作量：门腿（full）的重量不进收据
+            if (!_scratchMode) Touch(idx, moved, sized);
+            _measuringIdx = NodeTable.NoIndex;
+        }
     }
 
     private void BoundsPass(bool full)

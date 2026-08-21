@@ -29,6 +29,13 @@ public enum InvalidateReason : byte
     /// 要求这条路径可归因：把它记成 UserWrite 会让「谁失效了我」在最常见的 grayed/α 级联上说谎。
     /// </summary>
     CascadeDown = 7,
+
+    /// <summary>
+    /// 字形驻留到货的补 Mark（M1-18 补：α=0 占位的文本叶在页到货时要在 P7 原位换真 UV/真色）。
+    /// 与 <see cref="GlobalInvalidate"/> 不是一回事：到货**不换代**、不走 P2 窗口——老字形 UV
+    /// 恒有效，这只是「新字形像素好了」的定向增量；归因分开，CJK 冷启动的淡入频次才有账可查。
+    /// </summary>
+    ResidencyDelivered = 8,
 }
 
 /// <summary>
@@ -209,7 +216,7 @@ public sealed class InvalidationDiag
     public const int ChannelSlots = 16;
 
     private readonly long[] _byChannel = new long[ChannelSlots];
-    private readonly long[] _byReason = new long[8];
+    private readonly long[] _byReason = new long[16];   // 上限随 InvalidateReason 扩（现用 0..8）
 
     /// <summary>Mark 调用次数（含被等值切断之前的调用不计——切断发生在 setter 侧，根本不到这里）。</summary>
     public long Marks;
