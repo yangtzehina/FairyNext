@@ -46,6 +46,10 @@ public static partial class Program
         BackendM15Suite();   // M1-15 Core/mock 半边：多面板扇出件（PanelFanout——钩子单占下的
                              // 分发/路由/帧边界安全）+ **上传字节神谕**（MirrorProbe：上传区间
                              // 逐字节对拍 CPU 镜像 + 帧末全量对拍），用例在 BackendM15Tests.cs（partial）
+        TextGlyphSuite();    // M1-17 字形源 + GlyphStore：TTF 解析 golden（合成钉字节 + Monaco
+                             // 独立神谕）/ cmap format 4+12 直映 / CFF 拒载有声 / 三本账
+                             // append-only / 页淘汰双门 / generation 仅 P2 / 双半区独立，
+                             // 用例在 TextGlyphTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

@@ -51,8 +51,8 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 - **M1-16 布局：约束图 + LinearLayout**（~1800 行）：ConstraintOp/FanOut 拓扑序单遍、offset 捕获、resolved 槽唯一写者、P5 四层骨架、parentUsesSize、受控窗（≤3 轮兜底）。门：**P5 幂等断言、布局差分神谕（L2）上线**（随机手建树，不等 FGB）。
 
 ### W9-W10 文本与 FGB
-- **M1-17 字形源 + GlyphStore**（278-597 段移植 + ~1200 行）：CPU 字体表（仅 glyf）、位图/SDF 页、append-only 三本账、页淘汰双门、generation 仅 P2、双半区接口。CFF 归编译器离线（M2-09）、emoji 走位图。
-- **M1-18 TextCore 无状态排版**（~1300 行）：Layout 纯函数（断行/对齐/ellipsis/measure 两把尺/LayoutArena/ref struct 结果）；M1 简化面=cmap 直映+纯文本；P5 量/P7 出 quad/Pending alpha=0。验证：文本·不变量 1/2/3（跨 DPI bit-identical）。M1-16 留缝：度量接缝签名已钉（`ITextMeasure` + `LayoutEngine.TextMeasure` 属性，P5 四层的第一层），Text 通道的排水消费者由本包注册（布局引擎只消费 Layout）。
+- **M1-17 字形源 + GlyphStore**（278-597 段移植 + ~1200 行）：CPU 字体表（仅 glyf）、位图/SDF 页、append-only 三本账、页淘汰双门、generation 仅 P2、双半区接口。CFF 归编译器离线（M2-09）、emoji 走位图。**已交付**：`src/Core/Text/`——TtfFontFace（fork 278-597 移植 + cmap format 12 增补 + 全读口窗口硬化 + CFF/截断拒载有声）、GlyphMetricsTable（度量半区，类型上无页账引用）、GlyphStore（位置/页两账 + 双门淘汰 + 提交二次验门 + `RequestRebuild` 核按钮 + `GlyphStoreFanOut` 硬独占挂接）；落地形态 blockquote 回写 architecture.md 平面四 B「CJK 冷启动」前。测试资产 = 合成 TTF 构造器（入库、字节自洽）+ Monaco.ttf 系统路径 golden（期望值独立采自 Python 手解，缺失 SKIP 有声；Apple 许可不允许入库）。
+- **M1-18 TextCore 无状态排版**（~1300 行）：Layout 纯函数（断行/对齐/ellipsis/measure 两把尺/LayoutArena/ref struct 结果）；M1 简化面=cmap 直映+纯文本；P5 量/P7 出 quad/Pending alpha=0。验证：文本·不变量 1/2/3（跨 DPI bit-identical）。M1-16 留缝：度量接缝签名已钉（`ITextMeasure` + `LayoutEngine.TextMeasure` 属性，P5 四层的第一层），Text 通道的排水消费者由本包注册（布局引擎只消费 Layout）。M1-17 留缝四条：① 排版只依赖 `IGlyphMetricsSource`（`GlyphMetricsTable`：MapCodepoint 直映 + advance/bbox em + `KerningEm` M1 恒 0 但**从第一天按「advance + kerning」求和写**，M2-09 落数据零改动）；② 发射侧走 `IGlyphRasterSource.EnsureResident/TryGetLocator`（texel 尺寸由栅格化方给；M1-17 无像素产者，缺字形 Pending alpha=0 的产者是本包/后包）；③ 引用纪律——叶发射时对用到的页 `AddPageRef`、文本变更/销毁对称 `ReleasePageRef`（淘汰门 1 + 换代 fan-out 目标集都靠它）；④ `GlyphStore.BeginFrame` 挂 `UiKernel.BeforeFrame`（页龄时间基），店的 P2 换代已自动经 `AttachInvalidation` 占 `GlyphStoreFanOut` 生效。
 - **M1-19 FGB blob 写读**（340 移植 + ~900 行）：头/段目录/全段写入器与 Cast 视图；NODE 列序=NodeTable ABI（同源 codegen）。fuzz 雏形。移植：Fqs blob IO+FNV 直搬。
 
 ### W10-W11 编译器与事件
@@ -77,7 +77,7 @@ FairyNext（FairyGUI 运行时 green-field 重写）已完成：设计书 v1.3�
 
 **阶段二 滚动与虚拟化**：M2-06 ScrollPane 显式状态机（~1500 + 抄公式 200 行 fork 2040-2318；门：**滚动命中端到端转正、Idle⇒visual==round(logical) 断言**）→ M2-07 虚拟列表三件套（~1500；固定物理节点集/epoch/key/焦点 dataKey/受控窗快路径；门：**满屏滚动 uploadBytes 基准上线**，风险#4 落位）。
 
-**阶段三 文本完整化**：M2-08 富文本 IR（UBBParser 直搬 + Html 1450 移植 + ~600；内联对象=真子节点）→ M2-09 曲线字形源移植+预烘+font-map（~1800；GPU 段参考重写、per-size 路由、3500 常用字预烘、CJK 淡入）→ M2-10 文本输入+IME+焦点（~2000；gap buffer+OpLog、CommitTrigger 三选一、CompositionPatch 不写文档、ITextInputHost 查询面、AxisDelta 归一）。
+**阶段三 文本完整化**：M2-08 富文本 IR（UBBParser 直搬 + Html 1450 移植 + ~600；内联对象=真子节点）→ M2-09 曲线字形源移植+预烘+font-map（~1800；GPU 段参考重写、per-size 路由、3500 常用字预烘、CJK 淡入。M1-17 留缝：TtfFontFace 只到「二次轮廓收集」——8-band 烘焙从 fork CurveFontStore 378-401 另移；`GlyphMetricsTable.KerningEm` 在此落 kern/GPOS 数据；`ResidencyState.Pending` 的异步烘焙产者与页淘汰的「内存水位」扫描策略在此进驻，双门判据本体不动）→ M2-10 文本输入+IME+焦点（~2000；gap buffer+OpLog、CommitTrigger 三选一、CompositionPatch 不写文档、ITextInputHost 查询面、AxisDelta 归一）。
 
 **阶段四 收口**：M2-11 异步实例化（~600；同一 PLAN 前缀切片，异步/同步产物逐字节等价）→ M2-12 滤镜 RT 域+fadeGroup（~1500；事件驱动 recapture、离屏 pass 前置、Unity 沿用 CaptureCamera。M1-15 留缝：`UnityVertexStreamBackend` 现为 `SupportsOffscreen=false`、`BeginOffscreenPass` 计违约——本包补 pass 语义并翻能力位）→ M2-13 chaos+会话金样+诊断完整化（~1200；门：**chaos 门、金样门（L3）上线**；六诊断面统一 HUD）→ **M2-14 像素门全矩阵**（M2 收口件：24 关系×3 pivot×2 percent + transition/滚动/文本 + 降级各级专属用例 + 字形换代帧单列 + oracle 已知错豁免；风险#1 收口。含 2026-08 审计登记：**九宫格平铺发射落地**——tileGridIndice/scaleByTile 在 M1 发射器无表达、按有声原则拒发并计 `DegradeKind.Scale9TileUnimplemented`（LeafEmitter/Extract 有注释指到此处）；本包前须实现平铺发射并把语料上该计数清零，平铺像素用例进矩阵）→ M2-15 M2 集成验收（金样首批入库、延迟表全表）→ M2-16 WebGL2 预研收尾（副轨，为 M3 Buffer 立项供数）。
 
