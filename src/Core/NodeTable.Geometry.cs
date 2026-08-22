@@ -332,6 +332,15 @@ public sealed partial class NodeTable
         x = _posX[index]; y = _posY[index]; w = _width[index]; h = _height[index];
     }
 
+    /// <summary>
+    /// pivot 的下标读（布局平面 M1-20a：pivotCorrect 锚定算子的修正系数就是 authored pivot——
+    /// pivot 无 resolved 形态、编译后不变，求值现场读列与「烘为常量」逐位同）。只读。
+    /// </summary>
+    internal void PivotAt(uint index, out float px, out float py)
+    {
+        px = _pivotX[index]; py = _pivotY[index];
+    }
+
     private void ReadResolvedCore(uint i, out float x, out float y, out float w, out float h)
     {
         uint r = _resolvedRef[i];

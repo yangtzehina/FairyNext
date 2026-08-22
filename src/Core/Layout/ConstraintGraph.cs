@@ -45,8 +45,14 @@ public enum ConstraintKind : byte
 /// <summary>
 /// 约束算子（架构平面四 A：8B，烘焙期拓扑排序，**数组索引即拓扑序**）。
 /// 位域 <see cref="AxisEdges"/>：axis:1 | dstEdge:2 | srcEdge:2 | pivotCorrect:1（余 2 位保留写零）。
-/// pivotCorrect 的修正**系数**由编译器烘焙（M1-20 消灭 pivotAsAnchor 时产出）；本包只保布局位，
-/// <see cref="ConstraintGraphBuilder"/> 不提供置位入口——位存在而无人能置，语义落地前不会有静默错值。
+/// pivotCorrect（M1-20a 落地，置位入口 <see cref="ConstraintGraphBuilder.PinAnchor"/>）：
+/// 该位只出现在 Pin 算子上，把「钉住 dst 边」改写成「钉住 dst 的 pivot 锚点」——
+/// 约束方程从 <c>pos = c</c> 变为 <c>pos + pivot × size = c</c>（c 在建立/重捕获时取
+/// authored 锚点值）。修正**系数**就是 dst 节点的 authored pivot 分量：pivot 无 resolved
+/// 形态、编译后不变，求值现场读列与烘常量逐位同——不为它加第二份存储。
+/// 这是 pivotAsAnchor 编译期消灭的另一半：fork 在 resize 时保持 pivot 点不动
+/// （GObject.SetSize 的 HandlePositionChanged 半边），这里烘成一条锚定方程与
+/// 尺寸算子配对求解，语义对齐、实现不抄（事件驱动的现值保持在多写者下会漂移）。
 /// </summary>
 public struct ConstraintOp
 {
@@ -74,7 +80,7 @@ public struct ConstraintOp
     /// <summary>源边（FollowPercent 求值不读此位，见 <see cref="ConstraintKind"/>）。</summary>
     public EdgeSel SrcEdge => (EdgeSel)((AxisEdges >> 3) & 3);
 
-    /// <summary>pivot 修正位（系数烘焙归 M1-20；本包恒 0）。</summary>
+    /// <summary>pivot 修正位（M1-20a：Pin 算子的「锚点钉住」形态，见类型文档）。</summary>
     public bool PivotCorrect => (AxisEdges & (1 << 5)) != 0;
 }
 
@@ -212,6 +218,24 @@ public sealed class ConstraintGraphBuilder
     }
 
     /// <summary>
+    /// 声明一条锚点钉住（pivotCorrect 的置位入口，M1-20a）：约束 <c>pos + pivot × size = 捕获锚点</c>，
+    /// pivot 读 dst 节点的 authored pivot 分量。**与同轴的 Size 算子配对使用**（编译器对
+    /// pivotAsAnchor 节点的单尺寸算子注入之，配成拉伸对联立求解——尺寸变、锚点不动）；
+    /// 单独声明合法但只在布防初解/authored 重捕获时求值一次——它无源、不进 FanOut，
+    /// 别的算子改了尺寸不会自动唤醒它（<see cref="Seal"/> 对带伙伴的形态校验伙伴必须写 Size）。
+    /// </summary>
+    public void PinAnchor(ushort dst, LayoutAxis axis)
+    {
+        _ops.Add(new ConstraintOp
+        {
+            SrcNode = dst,           // 无源：置同 dst，FanOut 不为它建边
+            DstNode = dst,
+            Kind = (byte)ConstraintKind.Pin,
+            AxisEdges = ConstraintOp.Pack(axis, EdgeSel.Min, EdgeSel.Min, true),
+        });
+    }
+
+    /// <summary>
     /// 封图：校验 → 分组（(dstNode, axis) 每组 ≤2 算子、边不重）→ 组间依赖拓扑排序（Kahn，
     /// 按组创建序取零入度 ⇒ 输出确定）→ 环拒绝（带路径）→ 发射拓扑序算子表 + FanOut CSR + 归属掩码。
     /// </summary>
@@ -246,6 +270,18 @@ public sealed class ConstraintGraphBuilder
                 return new ConstraintGraphResult("节点 " + op.DstNode + " 的 " + op.Axis + " 轴被绑标量超过 2 个（每轴 0~2：1=平移，2=拉伸）");
             if (members.Count == 1 && _ops[members[0]].DstEdge == op.DstEdge)
                 return new ConstraintGraphResult("节点 " + op.DstNode + " 的 " + op.Axis + "." + op.DstEdge + " 被声明了两次（同边双写没有次序语义）");
+            if (members.Count == 1)
+            {
+                // 锚点钉住的配对校验（M1-20a）：pivotCorrect 的方程行是 (1, pivot)，伙伴若不写
+                // Size（行 (0,1)），两行在 pivot 取某些值时线性相关（det=0），联立无解/无穷解。
+                ConstraintOp first = _ops[members[0]];
+                bool anyPivot = first.PivotCorrect || op.PivotCorrect;
+                bool pairedWithSize = (first.PivotCorrect && op.DstEdge == EdgeSel.Size)
+                    || (op.PivotCorrect && first.DstEdge == EdgeSel.Size);
+                if (anyPivot && !pairedWithSize)
+                    return new ConstraintGraphResult("节点 " + op.DstNode + " 的 " + op.Axis
+                        + " 轴：锚点钉住（pivotCorrect）只允许与写 Size 的算子配对（联立行列式非零的唯一形态）");
+            }
             members.Add(i);
         }
 

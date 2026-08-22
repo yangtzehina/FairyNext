@@ -713,7 +713,13 @@ public sealed class LayoutEngine : IChannelDrain
         if (partner < 0)
         {
             float v = TargetValue(inst, head);
-            switch (op.DstEdge)
+            if (op.PivotCorrect)
+            {
+                // 锚点钉住（M1-20a）：pos + pivot×size = v ⇒ pos = v − pivot×size（尺寸不动）。
+                npos = v - PivotOf(dstIdx, op.Axis) * size;
+                nsize = size;
+            }
+            else switch (op.DstEdge)
             {
                 case EdgeSel.Size: npos = pos; nsize = v; break;
                 case EdgeSel.Min: npos = v; nsize = size; break;
@@ -726,9 +732,9 @@ public sealed class LayoutEngine : IChannelDrain
         {
             float v1 = TargetValue(inst, head);
             float v2 = TargetValue(inst, partner);
-            RowOf(op.DstEdge, out float a1, out float b1);
-            RowOf(inst.G.Ops[partner].DstEdge, out float a2, out float b2);
-            float det = a1 * b2 - a2 * b1;                          // 边不重 ⇒ det ≠ 0（Seal 校验）
+            RowOfOp(in inst.G.Ops[head], dstIdx, out float a1, out float b1);
+            RowOfOp(in inst.G.Ops[partner], dstIdx, out float a2, out float b2);
+            float det = a1 * b2 - a2 * b1;                          // 边不重/锚定配 Size ⇒ det ≠ 0（Seal 校验）
             npos = (v1 * b2 - v2 * b1) / det;
             nsize = (a1 * v2 - a2 * v1) / det;
             Stats.OpsEvaluated += 2;
@@ -756,6 +762,26 @@ public sealed class LayoutEngine : IChannelDrain
             case EdgeSel.Max: a = 1f; b = 1f; break;
             default: a = 0f; b = 1f; break;                         // Size
         }
+    }
+
+    /// <summary>算子的方程行 a·pos + b·size = v。pivotCorrect 锚定行 = (1, pivot)（M1-20a）。</summary>
+    private void RowOfOp(in ConstraintOp op, uint dstIdx, out float a, out float b)
+    {
+        if (op.PivotCorrect)
+        {
+            a = 1f;
+            b = PivotOf(dstIdx, op.Axis);
+            return;
+        }
+        RowOf(op.DstEdge, out a, out b);
+    }
+
+    /// <summary>dst 的 authored pivot 分量（pivotCorrect 修正系数：pivot 无 resolved 形态，
+    /// 差分神谕两腿读同一列，与烘常量逐位同）。</summary>
+    private float PivotOf(uint idx, LayoutAxis axis)
+    {
+        _table.PivotAt(idx, out float px, out float py);
+        return axis == LayoutAxis.X ? px : py;
     }
 
     private float TargetValue(Instance inst, int opIdx)
@@ -882,7 +908,12 @@ public sealed class LayoutEngine : IChannelDrain
         switch ((ConstraintKind)op.Kind)
         {
             case ConstraintKind.Pin:
-                inst.Offsets[opIdx] = authEdge;
+                // 锚定形态钉的是 authored 锚点（pos + pivot×size）；普通 Pin 钉边值。
+                // 「用户写 authored 即重捕获」对两种形态是同一条规则：fork 的 pivotAsAnchor
+                // 里用户写 x 写的就是锚点，这里等价为「锚点常量随 authored 写刷新」。
+                inst.Offsets[opIdx] = op.PivotCorrect
+                    ? apos + PivotOf(dstIdx, op.Axis) * asize
+                    : authEdge;
                 break;
             case ConstraintKind.FollowDelta:
                 inst.Offsets[opIdx] = authEdge - ReadSrcEdge(inst, op.SrcNode, op.Axis, op.SrcEdge);

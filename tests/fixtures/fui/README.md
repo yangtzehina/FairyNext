@@ -1,6 +1,6 @@
-# .fui 样例包（M1-12 前端读取器的字段级对照物）
+# .fui 样例包（M1-12 前端读取器 + M1-20a 编译器建树的字段级对照物）
 
-四个**未经修改**的已发布 .fui 包，逐字节拷自 `oracle.lock` 钉死的 fork：
+六个**未经修改**的已发布 .fui 包，逐字节拷自 `oracle.lock` 钉死的 fork：
 
 | 文件 | 来源（oracle @ 08a2d56） | sha256 | 为什么选它 |
 |---|---|---|---|
@@ -8,6 +8,8 @@
 | `Cooldown.fui` | `Assets/Examples/Resources/UI/Cooldown_fui.bytes` | `6228d854…` | 位图字体条目、依赖表非空、sprite 裁白 offset 与旋转入图集 |
 | `ScrollPane.fui` | `Assets/Examples/Resources/UI/ScrollPane_fui.bytes` | `e6709ebb…` | 组件级 `overflow=scroll`（块 7 滚动配置）、关系边类型混合 |
 | `TextMeshPro.fui` | `Assets/Examples/Resources/UI/TextMeshPro_fui.bytes` | `3fa963e9…` | 描述符 **version 7**（走 `version >= 5` 的尾字段分支）、RichText/InputText |
+| `PullToRefresh.fui` | `Assets/Examples/Resources/UI/PullToRefresh_fui.bytes` | `556ddef7…` | **M1-20a 加**：GGroup 两组（组自身带关系 + 组员带跨组关系）、纯矩形 Graph、gear 混排——GGroup 真节点化的对照物 |
+| `TurnPage.fui` | `Assets/Examples/Resources/UI/TurnPage_fui.bytes` | `4f2883ef…` | **M1-20a 加**：`pivot="0.5,1" anchor="true"` 的组员（Page.xml 的 model）——pivotAsAnchor 原点换算的对照物；另有 Loader/gearXY |
 
 改名只去掉了 Unity 的 `_fui.bytes` 后缀（那是 `TextAsset` 的加载约定，与格式无关）。
 

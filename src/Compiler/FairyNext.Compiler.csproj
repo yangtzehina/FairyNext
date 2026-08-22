@@ -13,4 +13,9 @@
     <!-- FGB 写入器（M1-19）：头/目录偏移与段 fourcc 直读 AbiLayout/Abi——同一条「直接依赖写明」纪律。 -->
     <ProjectReference Include="../Contracts/FairyNext.Contracts.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- M1-20a：关系翻译表/组归属规划是内部件，其 golden/负例（含约束环拒绝的合成语料——
+         真实样例包不带环）要能直取内部面；与 Core 同款开放口径。 -->
+    <InternalsVisibleTo Include="FairyNext.Tests" />
+  </ItemGroup>
 </Project>

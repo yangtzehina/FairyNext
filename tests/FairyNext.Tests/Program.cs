@@ -59,6 +59,11 @@ public static partial class Program
                              // （生成物 ⇄ Abi 表 ⇄ NodeTable 实际列）+ FNV fork 对拍 +
                              // fuzz 雏形（1200 变体 seed 固定；M1-22 转常设门），
                              // 用例在 FgbTests.cs（partial）
+        CompilerShapeSuite(); // M1-20a FgbCompiler 前半：.fui → 建树（GGroup 真节点化 /
+                             // pivotAsAnchor 编译期消灭 / localId 映射）→ relation → 约束编译
+                             //（**约束环拒绝 FGM101（L0）上线**）→ 编译期 P5 + 度量（复用
+                             // TextSystem/LayoutEngine，LateSlotAllocs 恒零升门 FGM902），
+                             // 用例在 CompilerShapeTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;
