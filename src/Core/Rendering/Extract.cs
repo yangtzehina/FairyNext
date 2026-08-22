@@ -222,6 +222,9 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
     private int[] _ownedSlots = Array.Empty<int>();
     private int _ownedSlotCount;
 
+    private StencilFrame[] _stencil = Array.Empty<StencilFrame>();
+    private int _stencilDepth;
+
     private int _hiddenSkipped, _clipCulled, _reordered, _slotsClaimed, _unplaceable;
 
     /// <summary>接一条流与一棵树。</summary>
@@ -246,6 +249,15 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
 
     /// <summary>后端（可随时换；重编时用来拆孤岛句柄）。</summary>
     public IRenderBackend? Backend { get; set; }
+
+    /// <summary>
+    /// 孤岛内容登记表（M1-23）。整编时只读它两样东西：③的具名种类、②的
+    /// <see cref="IIslandContent.AcceptsClipInclude"/> 声明——**整编不调任何内容回调**
+    /// （那些在 P7 收尾的同步里，见 <see cref="IslandTable.Sync"/>）。
+    /// 不装表也能整编：孤岛照样进流、照样切 run，只是没有内容对象可问，②按正路（include）走。
+    /// 增量正确性门的神谕腿必须与活流装**同一张表**，否则两腿会在 clipMode 上分叉。
+    /// </summary>
+    public IslandTable? Islands { get; set; }
 
     /// <summary>
     /// 面板根（默认树根）。Structure 排水只对**落在本面板子树内**的脏句柄负责——
@@ -345,6 +357,7 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
         _hiddenSkipped = _clipCulled = _reordered = _slotsClaimed = _unplaceable = 0;
         _pendingCount = 0;
         _runStart = 0;
+        _stencilDepth = 0;
 
         // 上一次重编认领的槽先还回去：槽表**不**随 BeginRebuild 清空（Claim 归调用方，
         // 滚动的槽要跨重编存活），所以 Extract 自己认的必须自己还，否则每编一次漏一批槽。
@@ -379,6 +392,11 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
 
         for (int k = panelStart; k < panelEnd; k++)
         {
+            // ④stencil 括号闭合：paintOrder 是 DFS 前序 ⇒ 子树是连续区间，走出区间的那一刻
+            // 就是「内容画完了」的那一刻。括号在这里闭，嵌套按 LIFO——「进了没出」在 stencil
+            // 路径上的症状是整屏被裁掉，与「内容没画」无法区分，所以闭合不能靠调用方自觉。
+            CloseStencilBrackets(k);
+
             uint idx = (uint)order[k];
             if (!_table.IsIndexAlive(idx)) continue;
 
@@ -426,6 +444,7 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
                 CountInherit(clip, rec.OpensClip);
         }
 
+        CloseStencilBrackets(int.MaxValue);   // 面板走完：还开着的括号在这里全部闭合
         FlushRun();
         _stream.EndRebuild();
 
@@ -511,6 +530,20 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
         return true;
     }
 
+    /// <summary>一个还开着的 ④stencil 括号（闭合时按它重建 Exit 记录：括号两边必须逐字段同形）。</summary>
+    private struct StencilFrame
+    {
+        internal NodeHandle Node;
+        internal int End;              // 子树在 paintOrder 里的右开界
+        internal int Depth;            // 模板 ref 值（1 起）
+        internal int Slot;
+        internal int Clip;
+        internal IslandClipMode ClipMode;
+        internal IslandVisual Visual;
+        internal int RenderEveryN;
+        internal string? DebugName;
+    }
+
     private void EmitIsland(NodeHandle node, in ContentRecord rec, int clip,
         in Affine2D world, bool axisAligned, uint worldVisual)
     {
@@ -521,18 +554,103 @@ public sealed class Extract : IChannelDrain, Events.IHitClipSource
             _unplaceable++;
             return;
         }
-        // 孤岛是栅栏：它之前的叶必须先按本 run 的序落进流，之后的叶属于下一个 run。
+
+        IIslandContent? content = Islands?.ContentOf(node);
+        IslandNativeKind native = rec.Island == IslandKind.ExternalNative
+            ? Islands?.NativeKindOf(node) ?? IslandNativeKind.None
+            : IslandNativeKind.None;
+        IslandClipMode clipMode = ClipModeOf(node, rec.Island, clip, content);
+        IslandVisual visual = VisualOf(worldVisual);
+        int everyN = rec.RenderEveryN <= 0 ? 1 : rec.RenderEveryN;
+
+        if (rec.Island != IslandKind.StencilMask)
+        {
+            AddIslandRecord(node, rec.Island, native, IslandBracket.None, 0,
+                clipMode, slot, clip, in visual, everyN, rec.DebugName);
+            return;
+        }
+
+        // ④：一个节点两条记录。开括号在这里，闭括号由 CloseStencilBrackets 在走出子树时补。
+        if (_stencilDepth >= IslandTable.StencilDepthBudget)
+        {
+            _stream.Degrades.Report(DegradeKind.StencilDepthOverflow,
+                $"stencil 域 {node} 嵌套第 {_stencilDepth + 1} 层，超预算 {IslandTable.StencilDepthBudget}——不进流");
+            return;
+        }
+        if (_stencilDepth == _stencil.Length)
+            Array.Resize(ref _stencil, _stencil.Length == 0 ? 4 : _stencil.Length * 2);
+
+        int depth = _stencilDepth + 1;
+        _table.TryGetSubtreeRange(node, out int subStart, out int subCount);
+        _stencil[_stencilDepth++] = new StencilFrame
+        {
+            Node = node,
+            End = subStart + subCount,
+            Depth = depth,
+            Slot = slot,
+            Clip = clip,
+            ClipMode = clipMode,
+            Visual = visual,
+            RenderEveryN = everyN,
+            DebugName = rec.DebugName,
+        };
+        AddIslandRecord(node, IslandKind.StencilMask, IslandNativeKind.None, IslandBracket.Enter, depth,
+            clipMode, slot, clip, in visual, everyN, rec.DebugName);
+    }
+
+    /// <summary>闭合全部右开界 ≤ <paramref name="paintIndex"/> 的 stencil 括号（LIFO）。</summary>
+    private void CloseStencilBrackets(int paintIndex)
+    {
+        while (_stencilDepth > 0 && _stencil[_stencilDepth - 1].End <= paintIndex)
+        {
+            StencilFrame f = _stencil[--_stencilDepth];
+            AddIslandRecord(f.Node, IslandKind.StencilMask, IslandNativeKind.None, IslandBracket.Exit,
+                f.Depth, f.ClipMode, f.Slot, f.Clip, in f.Visual, f.RenderEveryN, f.DebugName);
+        }
+    }
+
+    /// <summary>切 run + 记一条孤岛（孤岛是栅栏：之前的叶先落进流，之后的叶属于下一个 run）。</summary>
+    private void AddIslandRecord(NodeHandle node, IslandKind kind, IslandNativeKind native,
+        IslandBracket bracket, int depth, IslandClipMode clipMode, int slot, int clip,
+        in IslandVisual visual, int renderEveryN, string? debugName)
+    {
         FlushRun();
         _stream.AddIsland(new IslandDesc
         {
-            Kind = rec.Island,
+            Kind = kind,
+            NativeKind = native,
+            Bracket = bracket,
+            StencilDepth = depth,
+            ClipMode = clipMode,
+            Node = node,
             Slot = slot,
             ClipIndex = clip,
-            Visual = VisualOf(worldVisual),
-            RenderEveryN = rec.RenderEveryN <= 0 ? 1 : rec.RenderEveryN,
-            DebugName = rec.DebugName,
+            Visual = visual,
+            RenderEveryN = renderEveryN,
+            DebugName = debugName,
         });
         _runStart = _pendingCount;
+    }
+
+    /// <summary>
+    /// 裁剪下发方式（架构机制 9 的②号条目）。四条规则，**scissor 一律有声**：
+    /// <code>
+    ///   不在裁剪域里                        → None（不问任何人）
+    ///   内容声明 AcceptsClipInclude          → ShaderInclude（正路：材质自己采样裁剪域）
+    ///   没登记内容 且 kind == CustomMaterial → ShaderInclude（②默认走正路；拒绝是显式声明出来的）
+    ///   其余（外部渲染器 / 声明拒绝）        → Scissor + 一次 ScissorFallback
+    /// </code>
+    /// scissor 是**屏幕轴对齐**的矩形：旋转裁剪下没有静默正确解，所以它必须是一条有计数的降级，
+    /// 而不是一个悄悄生效的兜底（机制 4「无一级画错」）。
+    /// </summary>
+    private IslandClipMode ClipModeOf(NodeHandle node, IslandKind kind, int clip, IIslandContent? content)
+    {
+        if (clip == ClipBook.NoneEntry) return IslandClipMode.None;
+        bool include = content != null ? content.AcceptsClipInclude : kind == IslandKind.CustomMaterial;
+        if (include) return IslandClipMode.ShaderInclude;
+        _stream.Degrades.Report(DegradeKind.ScissorFallback,
+            $"孤岛 {node}（{kind}）不接受 clip 的 shader include——退屏幕轴对齐 scissor（旋转裁剪下不保证正确）");
+        return IslandClipMode.Scissor;
     }
 
     // ── 收口期：排序 + 切段 ─────────────────────────────────────────────────

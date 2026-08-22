@@ -101,16 +101,31 @@ public struct RunRecord
 }
 
 /// <summary>
-/// 孤岛的 CPU 记录（架构机制 9）。孤岛一律**无限盒栅栏**、占一个 run 序；
-/// 内容侧接口 <c>IIslandContent</c> 归 M1-23，本记录只是流侧的账：谁、插在哪、骑哪个槽、
-/// 本帧是否自报仍在动（零脏帧短路的第三个前提，不变量 13）。
+/// 孤岛的 CPU 记录（架构机制 9）。孤岛一律**无限盒栅栏**、占一个 run 序
+/// （<see cref="PaintOrderIndex"/> 是它自己的那一个）；本记录是流侧的账：
+/// 谁、插在哪、骑哪个槽、裁剪怎么下发、本帧是否自报仍在动（零脏帧短路的第三个前提，不变量 13）。
+/// 内容对象不在这里——它住 <see cref="IslandTable"/>，按 <see cref="Node"/> 反查。
+/// SoA 表与内容对象分家的理由与叶一样：流要能在没有任何内容对象的进程里（编译器 = 无头运行时）
+/// 原样存在。
 /// </summary>
 public struct IslandRecord
 {
     /// <summary>类别。</summary>
     public IslandKind Kind;
+    /// <summary>③外部原生的具名种类。</summary>
+    public IslandNativeKind NativeKind;
+    /// <summary>④stencil 括号位（成对，可嵌套）。</summary>
+    public IslandBracket Bracket;
+    /// <summary>④stencil 嵌套深度（1 起；即模板 ref 值）。</summary>
+    public int StencilDepth;
+    /// <summary>裁剪下发方式（②的 include/scissor 二分）。</summary>
+    public IslandClipMode ClipMode;
+    /// <summary>孤岛节点（可见性判据与内容反查的身份）。</summary>
+    public NodeHandle Node;
     /// <summary>插在哪个 run 之前。</summary>
     public int RunBefore;
+    /// <summary>本孤岛独占的绘制序下标（sortingOrder = 本值 × <see cref="Abi.PaintOrderStride"/>）。</summary>
+    public int PaintOrderIndex;
     /// <summary>绑定的 transform 槽。</summary>
     public int Slot;
     /// <summary>绑定的 ClipEntry 下标。</summary>
@@ -125,6 +140,15 @@ public struct IslandRecord
     public bool StillAnimating;
     /// <summary>诊断名。</summary>
     public string? DebugName;
+
+    /// <summary>派生序号（= <see cref="PaintOrderIndex"/> × <see cref="Abi.PaintOrderStride"/>）。</summary>
+    public readonly int SortingOrder => PaintOrderIndex * Abi.PaintOrderStride;
+
+    /// <inheritdoc/>
+    public readonly override string ToString() =>
+        $"island {Kind}{(NativeKind == IslandNativeKind.None ? "" : "/" + NativeKind)}"
+        + $"{(Bracket == IslandBracket.None ? "" : " " + Bracket + "@" + StencilDepth)}"
+        + $" node={Node.Index} run<{RunBefore} order={SortingOrder} slot={Slot} clip={ClipEntry}/{ClipMode}";
 }
 
 /// <summary>

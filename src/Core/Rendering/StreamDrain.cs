@@ -55,6 +55,7 @@ public sealed class StreamDrain : IChannelDrain
     private readonly IExtractSource _source;
 
     private int[] _leafOf = Array.Empty<int>();            // 节点下标 → 叶下标（-1 = 不在流里）
+    private int[] _islandOf = Array.Empty<int>();          // 节点下标 → **首条**孤岛记录（-1 = 不是孤岛）
     private Affine2D[] _leafWorld = Array.Empty<Affine2D>();   // 叶落位时用的 world（tier-2 增量的基准）
     private bool _mapValid;
     private uint _mapEpoch;
@@ -102,6 +103,12 @@ public sealed class StreamDrain : IChannelDrain
     /// <summary>会话累计的隐显落点次数。</summary>
     public int VisibleTouches { get; private set; }
 
+    /// <summary>会话累计：孤岛级联视觉的重写次数（「visual 并入下行」的收据）。</summary>
+    public int IslandRecolors { get; private set; }
+
+    /// <summary>会话累计：孤岛内容自报脏被消化的次数（**不是**整编次数）。</summary>
+    public int IslandDirtyTouches { get; private set; }
+
     /// <summary>叶反查表重建次数（= 流的结构代变化次数）。</summary>
     public int MapRebuilds { get; private set; }
 
@@ -136,6 +143,21 @@ public sealed class StreamDrain : IChannelDrain
         int leaf = _leafOf[idx];
         if (leaf < 0 || leaf >= _stream.LeafCount) return -1;
         return _stream.Leaf(leaf).Node.Equals(node) ? leaf : -1;
+    }
+
+    /// <summary>
+    /// 节点 → **首条**孤岛记录下标（不是孤岛返回 -1）。
+    /// ④stencil 的一个节点有 Enter/Exit 两条记录，两条**共享**这一个入口——
+    /// 对它们的写（visual 级联）必须成对落到两条上，否则括号两边对同一帧给出两种说法。
+    /// </summary>
+    public int IslandOf(NodeHandle node)
+    {
+        EnsureMap();
+        if (!_table.TryResolve(node, out uint idx)) return -1;
+        if (idx >= (uint)_islandOf.Length) return -1;
+        int island = _islandOf[idx];
+        if (island < 0 || island >= _stream.IslandCount) return -1;
+        return _stream.Island(island).Node.Equals(node) ? island : -1;
     }
 
     /// <summary>清掉升级旗（P7 收尾整编之后调）。</summary>
@@ -174,6 +196,10 @@ public sealed class StreamDrain : IChannelDrain
     private void DrainContent(NodeHandle node)
     {
         int leaf = LeafOf(node);
+        // 孤岛内容自报脏（IslandMount.MarkDirty）走的就是 Content 通道，但它**不是**一次
+        // 叶内重写、更不是一次整编：外部内容的像素不由我们产生，我们只负责「本帧别跳过它」。
+        // 升级 Structure 会让每一次 Spine 帧推进都整编一次面板——把最常见的外部动效判成结构变化。
+        if (leaf < 0 && TouchIslandDirty(node)) return;
         if (leaf < 0 || !_table.TryResolve(node, out uint idx)) { Escalate(EscalateCause.NotInStream); return; }
         LeafRange r = _stream.Leaf(leaf);
         if (!TryLeafSpec(node, out LeafSpec spec)) { Escalate(EscalateCause.NoContent); return; }
@@ -244,6 +270,7 @@ public sealed class StreamDrain : IChannelDrain
     private void DrainColor(NodeHandle node)
     {
         int leaf = LeafOf(node);
+        if (leaf < 0 && RecolorIsland(node)) return;
         // 容器没有叶：它的 α/置灰经下行通道落到子树的叶上，各叶自己会进本通道。
         // 这里升级 Structure 会让每一次容器淡入都整编一次面板——那是把最常见的动效判成结构变化。
         if (leaf < 0 || !_table.TryResolve(node, out uint idx)) return;
@@ -257,6 +284,7 @@ public sealed class StreamDrain : IChannelDrain
     private void DrainVisible(NodeHandle node)
     {
         int leaf = LeafOf(node);
+        if (leaf < 0 && RecolorIsland(node)) return;
         // 不在流里的节点（容器、隐藏叶、被剔除的叶）翻可见性 ⇒ 一批叶要进流：整编。
         if (leaf < 0 || !_table.TryResolve(node, out uint idx)) { Escalate(EscalateCause.VisibleFlip); return; }
         if ((_table.WorldVisualAt(idx) & Visual.Visible) == 0)
@@ -268,6 +296,46 @@ public sealed class StreamDrain : IChannelDrain
         }
         _stream.SetLeafVisible(leaf, true);      // 仍可见：幂等落点（α 由 Color 通道负责）
         VisibleTouches++;
+    }
+
+    // ── 孤岛：visual 并入下行 / 内容自报脏 ──────────────────────────────────
+    //
+    // 「孤岛跟随祖先的 α/置灰/隐藏」这条随流契约（架构机制 9）在增量侧的落点。判据与叶**字面同源**：
+    // 可见性跃迁 = 孤岛要进/出流 = 数量变化 = 一次整编（整编产物里根本没有那条记录，
+    // 原位把 visual 清成不可见会让逐字节门当场变红）；α/置灰变化才是原位写。
+    // 读 worldVisual 的合法性也与叶同源：**在流里的孤岛按 Extract 的进流条件没有隐藏祖先**，
+    // 被隐藏祖先罩住的孤岛在第一行的 IslandOf 就返回 -1（它不在流里）。
+
+    /// <summary>孤岛的级联视觉重写。返回 true = 本节点是孤岛，本通道的活已经干完。</summary>
+    private bool RecolorIsland(NodeHandle node)
+    {
+        int first = IslandOf(node);
+        if (first < 0 || !_table.TryResolve(node, out uint idx)) return false;
+
+        IslandVisual visual = Extract.VisualOf(_table.WorldVisualAt(idx));
+        if (visual.Visible != _stream.Island(first).Visual.Visible)
+        {
+            Escalate(EscalateCause.VisibleFlip);
+            return true;
+        }
+        // ④的 Enter/Exit 两条记录必须同时改：括号两边是同一个孤岛的两个端点。
+        ReadOnlySpan<IslandRecord> islands = _stream.Islands;
+        for (int i = first; i < islands.Length; i++)
+        {
+            if (!islands[i].Node.Equals(node)) continue;
+            if (_stream.SetIslandVisual(i, in visual)) IslandRecolors++;
+        }
+        return true;
+    }
+
+    /// <summary>孤岛内容自报脏的消化。返回 true = 本节点是孤岛，不许升级 Structure。</summary>
+    private bool TouchIslandDirty(NodeHandle node)
+    {
+        int first = IslandOf(node);
+        if (first < 0) return false;
+        _stream.MarkIslandDirty(first);
+        IslandDirtyTouches++;
+        return true;
     }
 
     // ── 共用动作 ────────────────────────────────────────────────────────────
@@ -347,7 +415,17 @@ public sealed class StreamDrain : IChannelDrain
     {
         if (_mapValid && _mapEpoch == _stream.StructEpoch && _leafOf.Length >= _table.Capacity) return;
         if (_leafOf.Length < _table.Capacity) _leafOf = new int[_table.Capacity];
+        if (_islandOf.Length < _table.Capacity) _islandOf = new int[_table.Capacity];
         _leafOf.AsSpan().Fill(-1);
+        _islandOf.AsSpan().Fill(-1);
+
+        // 孤岛反查：只记**首条**记录（stencil 的 Exit 与 Enter 同节点，写入侧成对处理）。
+        ReadOnlySpan<IslandRecord> islands = _stream.Islands;
+        for (int i = 0; i < islands.Length; i++)
+        {
+            if (!_table.TryResolve(islands[i].Node, out uint iIdx)) continue;
+            if (_islandOf[iIdx] < 0) _islandOf[iIdx] = i;
+        }
 
         ReadOnlySpan<LeafRange> leaves = _stream.Leaves;
         if (_leafWorld.Length < leaves.Length) Array.Resize(ref _leafWorld, Math.Max(8, leaves.Length));

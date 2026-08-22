@@ -3,7 +3,7 @@ namespace FairyNext.Core.Rendering;
 /// <summary>
 /// 实例流的**只读快照**（架构接缝：渲染平面向验证平面暴露的那份视图）。
 ///
-/// 六个数组一次拷贝定格：quads / baseColor / segments / runs / clips / slots。
+/// 七个数组一次拷贝定格：quads / baseColor / segments / runs / clips / slots / islands。
 /// 拷贝而非引用是本类型的全部意义——三条门都要「同一时刻的两份流」互相比：
 ///  - 增量正确性门（不变量 1）：增量消化 vs 从树全量重建，逐字节比；
 ///  - Trace 逐帧哈希（M1-24）：每帧一个规范化哈希，比首分歧帧；
@@ -24,6 +24,7 @@ public sealed class StreamSnapshot
     private readonly SlotEntry[] _slots;
     private readonly SegmentDesc[] _segments;
     private readonly RunOrder[] _runs;
+    private readonly IslandRecord[] _islands;
 
     /// <summary>定格一份快照（六个数组全部拷贝）。</summary>
     /// <param name="quads">实例流。</param>
@@ -34,6 +35,7 @@ public sealed class StreamSnapshot
     /// <param name="runs">run 派生序。</param>
     /// <param name="structEpoch">结构代（序派生的唯一许可证）。</param>
     /// <param name="debugName">诊断名。</param>
+    /// <param name="islands">孤岛挂载表（默认空——不带孤岛的流与「孤岛表为空」是同一件事）。</param>
     public StreamSnapshot(
         ReadOnlySpan<QuadInstance> quads,
         ReadOnlySpan<uint> baseColor,
@@ -42,7 +44,8 @@ public sealed class StreamSnapshot
         ReadOnlySpan<SegmentDesc> segments,
         ReadOnlySpan<RunOrder> runs,
         uint structEpoch = 0,
-        string? debugName = null)
+        string? debugName = null,
+        ReadOnlySpan<IslandRecord> islands = default)
     {
         _quads = quads.ToArray();
         _baseColor = baseColor.ToArray();
@@ -50,6 +53,7 @@ public sealed class StreamSnapshot
         _slots = slots.ToArray();
         _segments = segments.ToArray();
         _runs = runs.ToArray();
+        _islands = islands.ToArray();
         StructEpoch = structEpoch;
         DebugName = debugName;
     }
@@ -77,6 +81,9 @@ public sealed class StreamSnapshot
     /// <summary>run 派生序。</summary>
     public ReadOnlySpan<RunOrder> Runs => _runs;
 
+    /// <summary>孤岛挂载表（长度 0 = 这条流没有孤岛）。</summary>
+    public ReadOnlySpan<IslandRecord> Islands => _islands;
+
     /// <summary>结构代（<see cref="IRenderBackend.SetRunOrders"/> 的许可证）。</summary>
     public uint StructEpoch { get; }
 
@@ -92,5 +99,6 @@ public sealed class StreamSnapshot
     /// <inheritdoc/>
     public override string ToString() =>
         $"snapshot {DebugName ?? "(anon)"} quads={_quads.Length} segs={_segments.Length} " +
-        $"runs={_runs.Length} clips={_clips.Length} slots={_slots.Length} epoch={StructEpoch}";
+        $"runs={_runs.Length} clips={_clips.Length} slots={_slots.Length} islands={_islands.Length} "
+        + $"epoch={StructEpoch}";
 }

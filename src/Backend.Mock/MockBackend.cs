@@ -149,8 +149,10 @@ public sealed class MockBackend : IRenderBackend
         internal uint Gen;
         internal bool Alive;
         internal int Stream;
+        internal long Seq;              // 建岛序（快照按它排：池下标会因回收而乱序）
         internal IslandDesc Desc;
         internal IslandSync Sync;
+        internal bool Synced;
     }
 
     private readonly List<MockStream> _streams = new List<MockStream>();
@@ -161,6 +163,7 @@ public sealed class MockBackend : IRenderBackend
     private readonly List<int> _openPasses = new List<int>();
     private readonly List<(int Stream, ulong Frame)> _fencePending = new List<(int, ulong)>();
 
+    private long _islandSeq;
     private bool _inFrame;
     private ulong _frameId;
     private bool _mainBound;
@@ -294,7 +297,53 @@ public sealed class MockBackend : IRenderBackend
             s.Segments,
             s.Runs,
             s.StructEpoch,
-            s.DebugName);
+            s.DebugName,
+            IslandsOf(handle.Index));
+    }
+
+    /// <summary>
+    /// 后端侧的孤岛表（<see cref="Snapshot"/> 用）：本流的活孤岛，**按建岛序**排。
+    /// 按池下标排是错的——回收后的槽会被复用，下标序与建岛序在第一次拆岛之后就分家；
+    /// 而镜像侧的孤岛表是重编产出的顺序表，两侧要能逐字节对拍就必须同序。
+    /// 每帧 <see cref="SyncIsland"/> 下发的 visual/clip 覆盖建岛时的值：后端持有的是**本帧的**挂载事实。
+    /// </summary>
+    private IslandRecord[] IslandsOf(int streamIndex)
+    {
+        int n = 0;
+        for (int i = 0; i < _islands.Count; i++)
+            if (_islands[i].Alive && _islands[i].Stream == streamIndex) n++;
+        if (n == 0) return Array.Empty<IslandRecord>();
+
+        var live = new List<MockIsland>(n);
+        for (int i = 0; i < _islands.Count; i++)
+            if (_islands[i].Alive && _islands[i].Stream == streamIndex) live.Add(_islands[i]);
+        live.Sort((a, b) => a.Seq.CompareTo(b.Seq));
+
+        var records = new IslandRecord[n];
+        for (int i = 0; i < n; i++)
+        {
+            MockIsland m = live[i];
+            IslandDesc d = m.Desc;
+            records[i] = new IslandRecord
+            {
+                Kind = d.Kind,
+                NativeKind = d.NativeKind,
+                Bracket = d.Bracket,
+                StencilDepth = d.StencilDepth,
+                ClipMode = m.Synced ? m.Sync.ClipMode : d.ClipMode,
+                Node = d.Node,
+                RunBefore = d.RunBefore,
+                PaintOrderIndex = d.PaintOrderIndex,
+                Slot = d.Slot,
+                ClipEntry = m.Synced ? m.Sync.ClipIndex : d.ClipIndex,
+                Visual = m.Synced ? m.Sync.Visual : d.Visual,
+                RenderEveryN = d.RenderEveryN,
+                Handle = IslandHandle.None,
+                StillAnimating = m.Synced && m.Sync.StillAnimating,
+                DebugName = d.DebugName,
+            };
+        }
+        return records;
     }
 
     /// <summary>
@@ -625,8 +674,10 @@ public sealed class MockBackend : IRenderBackend
         island.Gen++;
         island.Alive = true;
         island.Stream = stream.Index;
+        island.Seq = _islandSeq++;
         island.Desc = desc;
         island.Sync = default;
+        island.Synced = false;
 
         var handle = new IslandHandle(slot + 1, island.Gen);
         Log(MockCallKind.CreateIsland, stream.Index, handle.Index, (int)desc.Kind, desc.DebugName);
@@ -641,6 +692,7 @@ public sealed class MockBackend : IRenderBackend
         MockIsland? i = ResolveIsland(island, nameof(SyncIsland));
         if (i == null) return;
         i.Sync = sync;
+        i.Synced = true;
         Log(MockCallKind.SyncIsland, i.Stream, island.Index, sync.StillAnimating ? 1 : 0, null);
     }
 

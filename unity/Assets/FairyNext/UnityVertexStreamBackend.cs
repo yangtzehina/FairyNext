@@ -29,7 +29,10 @@ namespace FairyNext.UnityBackend
     ///
     /// ── 本包不做（登记在 plan.md 对应包）───────────────────────────────────
     /// 离屏 pass（M2-12 滤镜/fadeGroup）：Caps.SupportsOffscreen = false，误调进 Violations；
-    /// 孤岛渲染（M1-23）：记录收下、不产生原生对象；宿主 MonoBehaviour（LateUpdate 挂 Tick）归 M1-25。
+    /// 孤岛（M1-23 已交付**挂点**）：每岛一个 GameObject + <c>SortingGroup</c>，序号与段同出一本 run 序账，
+    /// 槽矩阵/可见性每帧下发；材质注入（②）与 stencil 状态机（④）随滤镜 RT 同批（M2-12），
+    /// 外部渲染器由宿主自己挂到 <c>IslandRoot(handle)</c> 之下。
+    /// 宿主 MonoBehaviour（LateUpdate 挂 Tick）归 M1-25。
     /// sortingOrder 是 Unity 的 int16 语义：paintOrder×16 超 32767 的巨树在本后端会夹紧
     /// （计一次 Violations），WebGL2 后端按数组序绘制无此上限（M3-03）。
     /// </summary>
@@ -105,6 +108,8 @@ namespace FairyNext.UnityBackend
             internal bool Alive;
             internal IslandDesc Desc;
             internal IslandSync Sync;
+            internal GameObject? Root;          // 宿主把外部渲染器挂在这下面
+            internal SortingGroup? Sorting;     // ③：外部渲染器与我们的段读同一本序账
         }
 
         private readonly Transform? _parent;
@@ -337,13 +342,32 @@ namespace FairyNext.UnityBackend
             s.RunsDirty = true;
         }
 
-        // ── 孤岛（M1-23 前只记账）────────────────────────────────────────────
+        // ── 孤岛（M1-23）─────────────────────────────────────────────────────
+        //
+        // 每个孤岛一个 GameObject 挂点，挂 SortingGroup。**序号与段读同一本账**：
+        // 段的 sortingOrder 来自 run 序（SortingOrderOf），孤岛的来自 IslandDesc.PaintOrderIndex —— 而
+        // 两者是渲染流里同一个序游标分配的（RenderStream.AddIsland 占一个 run 序）。序号来源不同的
+        // 两个渲染器一定会穿插错乱：这正是 fork GoWrapper 时代「Spine 忽前忽后」的病根。
+        // 挂点建在流根之下，于是它继承流根的 y 翻转（架构机制⑪：翻转全链路只此一处）。
+        //
+        // **不做**（登记）：材质注入（②的 clip include 归 shader 侧的 include 文件）、
+        // stencil 状态机（④要 CommandBuffer 或专用材质，与滤镜 RT 同批，M2-12）、
+        // 外部渲染器的实例化（宿主自己 new，挂到 IslandRoot 下）。本后端保证的是
+        // **序、变换、可见性、裁剪方式**四样按契约到位。
 
         /// <inheritdoc/>
         public IslandHandle CreateIsland(StreamHandle stream, in IslandDesc desc)
         {
-            _ = Resolve(stream, nameof(CreateIsland));
+            UStream? s = Resolve(stream, nameof(CreateIsland));
             var i = new IslandRecordSlot { Gen = 1, Alive = true, Desc = desc };
+            if (s != null)
+            {
+                i.Root = new GameObject(IslandNameOf(in desc));
+                i.Root.transform.SetParent(s.Root.transform, false);
+                i.Sorting = i.Root.AddComponent<SortingGroup>();
+                i.Sorting.sortingOrder = SortingOrderOfIsland(in desc);
+                ApplyIslandTransform(i, desc.Visual, FairyNext.Numerics.Affine2D.Identity);
+            }
             _islands.Add(i);
             return new IslandHandle(_islands.Count, i.Gen);
         }
@@ -352,14 +376,78 @@ namespace FairyNext.UnityBackend
         public void SyncIsland(IslandHandle island, in IslandSync sync)
         {
             if (island.IsNone || island.Index > _islands.Count) { Violate("SyncIsland 收到无效句柄"); return; }
-            _islands[island.Index - 1].Sync = sync;
+            IslandRecordSlot i = _islands[island.Index - 1];
+            if (!i.Alive) { Violate("SyncIsland 于已拆除的孤岛（use-after-free）"); return; }
+            i.Sync = sync;
+            if (i.Sorting != null) i.Sorting.sortingOrder = sync.SortingOrder;
+            ApplyIslandTransform(i, sync.Visual, sync.SlotMatrix);
         }
 
         /// <inheritdoc/>
         public void DestroyIsland(IslandHandle island)
         {
             if (island.IsNone || island.Index > _islands.Count) { Violate("DestroyIsland 收到无效句柄"); return; }
-            _islands[island.Index - 1].Alive = false;
+            IslandRecordSlot i = _islands[island.Index - 1];
+            i.Alive = false;
+            i.Sorting = null;
+            if (i.Root == null) return;
+            // 与流同一条 fence 纪律：先熄灯再入坟场（同帧 Destroy 不生效，僵尸对象污染像素探针）。
+            i.Root.SetActive(false);
+            _graveyard.Add((i.Root, _frameId));
+            i.Root = null;
+        }
+
+        /// <summary>孤岛挂点（宿主把 Spine/自定义渲染器挂到它下面；已拆除返回 null）。</summary>
+        public Transform? IslandRoot(IslandHandle island)
+        {
+            if (island.IsNone || island.Index > _islands.Count) return null;
+            IslandRecordSlot i = _islands[island.Index - 1];
+            return i.Alive && i.Root != null ? i.Root.transform : null;
+        }
+
+        /// <summary>孤岛本帧的同步内容（宿主/验证脚本读；未同步过为 default）。</summary>
+        public IslandSync IslandSyncOf(IslandHandle island)
+        {
+            if (island.IsNone || island.Index > _islands.Count) return default;
+            return _islands[island.Index - 1].Sync;
+        }
+
+        private static string IslandNameOf(in IslandDesc desc) =>
+            "Island:" + desc.Kind
+            + (desc.NativeKind == IslandNativeKind.None ? "" : "/" + desc.NativeKind)
+            + (desc.Bracket == IslandBracket.None ? "" : "/" + desc.Bracket + desc.StencilDepth)
+            + (desc.DebugName == null ? "" : ":" + desc.DebugName);
+
+        private int SortingOrderOfIsland(in IslandDesc desc)
+        {
+            long order = (long)desc.PaintOrderIndex * Abi.PaintOrderStride;
+            if (order <= short.MaxValue) return (int)order;
+            if (!_sortingClampReported)
+            {
+                _sortingClampReported = true;
+                Violate($"孤岛 sortingOrder {order} 超 Unity int16 语义上限被夹紧（巨树；WebGL2 后端无此上限，M3-03）");
+            }
+            return short.MaxValue;
+        }
+
+        /// <summary>
+        /// 槽矩阵 → 挂点 Transform，级联视觉 → 挂点开关。
+        /// 只搬**槽**：孤岛的几何原点在槽帧里，与实例的 rect 同一套坐标（y 向下，翻转在流根）。
+        /// 旋转/斜切在槽矩阵里，这里按 2×2 分解成 Unity 的 localRotation/localScale ——
+        /// 斜切在 Transform 上无表达，此时只保真旋转与缩放（外部渲染器本就不吃我们的 shader）。
+        /// </summary>
+        private static void ApplyIslandTransform(IslandRecordSlot i, in IslandVisual visual,
+            in FairyNext.Numerics.Affine2D m)
+        {
+            if (i.Root == null) return;
+            if (i.Root.activeSelf != visual.Visible) i.Root.SetActive(visual.Visible);
+            Transform t = i.Root.transform;
+            t.localPosition = new Vector3(m.tx, m.ty, 0f);
+            float sx = Mathf.Sqrt(m.m00 * m.m00 + m.m10 * m.m10);
+            float sy = Mathf.Sqrt(m.m01 * m.m01 + m.m11 * m.m11);
+            float rot = Mathf.Atan2(m.m10, m.m00) * Mathf.Rad2Deg;
+            t.localRotation = Quaternion.Euler(0f, 0f, rot);
+            t.localScale = new Vector3(sx == 0f ? 1f : sx, sy == 0f ? 1f : sy, 1f);
         }
 
         // ── pass 与绘制 ─────────────────────────────────────────────────────

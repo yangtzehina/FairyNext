@@ -17,7 +17,8 @@ namespace FairyNext.Tests;
 /// 两条 2026-08 审计遗留的验收项在本包结账：
 ///  ① **DownLayer 通道的排水路径不再零覆盖**——<see cref="DownLayerDrillLandsOnLeafColor"/>
 ///     钉住「Mark(DownLayer) → P6 下钻 → 落叶交回 Ch.Color/CascadeDown」这条真实路径；
-///     产品写者归 M1-23/M2-12 的成文裁决由 <see cref="DownLayerHasNoProductWriterYet"/> 守着
+///     产品写者归 M2-12 的成文裁决由 <see cref="DownLayerHasNoProductWriterYet"/> 守着
+///     （M1-23 结账：孤岛跟随的是 α/置灰/隐藏三元，走 DownColor/DownVisible，不是翻层）
 ///     （出现首个写者即红，逼出「级联落到命中/绘制序」的行为用例）。
 ///  ② **clip 剪枝与渲染剔除同源**——<see cref="ClipCullAndHitAgreeOnTheSameWindow"/>：
 ///     同一裁剪场景里「被渲染剔除的叶」与「命中不到的叶」必须是同一只，两侧同吃
@@ -765,11 +766,15 @@ public static partial class Program
 
     private static void DownLayerHasNoProductWriterYet()
     {
-        // **成文裁决的执法点**（M1-21）：DownLayer 的首个**产品**写者不在本包——
-        // 命中缓存是帧内的（帧号护栏），不需要失效通道；绘制序的层归 Ch.Structure；
-        // 真正会写它的是「整棵子树翻层」——孤岛 visual 并入下行（M1-23）与滤镜 RT 域翻层
-        // （M2-12，fork 的 Container.SetChildrenLayer 同源）。
-        // 本门守着这条裁决：一旦有属性把 DownLayer 列进 Marks，它就红——红的时候请同时补上
+        // **成文裁决的执法点**（M1-21 立，M1-23 续）：DownLayer 的首个**产品**写者仍然不在库里——
+        // 命中缓存是帧内的（帧号护栏），不需要失效通道；绘制序的层归 Ch.Structure。
+        //
+        // M1-23 结账：孤岛 visual 并入下行**没有**成为首个写者。孤岛跟随的是 α/置灰/隐藏三元，
+        // 那是 DownColor/DownVisible 的语义；孤岛的「层」是它自己那一个 run 序（分配自流的序游标，
+        // 归 Ch.Structure），没有任何属性去写它。DownLayer 在 M1-23 只多了一个**消费者**——
+        // 下钻落到孤岛（IslandTests 的 IslandFollowsDownLayerDrill 钉住那条路径）。
+        // 于是本登记原样转给 **M2-12**（滤镜 RT 域翻层，fork 的 Container.SetChildrenLayer 同源）：
+        // 一旦有属性把 DownLayer 列进 Marks，它就红——红的时候请同时补上
         // 「DownLayer 级联落到命中/绘制序」的行为用例，然后改本门。
         int writers = 0;
         string names = "";

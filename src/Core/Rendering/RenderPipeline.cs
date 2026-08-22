@@ -37,6 +37,7 @@ public sealed class RenderPipeline
     private readonly IExtractSource _source;
     private readonly Extract _extract;
     private readonly StreamDrain _drain;
+    private readonly IslandTable _islands = new IslandTable();
     private IRenderBackend _backend;
 
     private NodeHandle[] _roots = new NodeHandle[32];
@@ -57,8 +58,9 @@ public sealed class RenderPipeline
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
         _table = kernel.Table;
         _invalidation = kernel.Invalidation;
-        _extract = new Extract(stream, _table, source, backend);
+        _extract = new Extract(stream, _table, source, backend) { Islands = _islands };
         _drain = new StreamDrain(stream, _table, source);
+        _islands.Invalidation = _invalidation;
     }
 
     // ── 只读面 ──────────────────────────────────────────────────────────────
@@ -74,6 +76,14 @@ public sealed class RenderPipeline
 
     /// <summary>内容源。</summary>
     public IExtractSource Source => _source;
+
+    /// <summary>
+    /// 本面板的孤岛内容登记表（M1-23）。一表一面板——离开检测按「本帧没在本流里出现过」判定。
+    /// </summary>
+    public IslandTable Islands => _islands;
+
+    /// <summary>最近一次 P7 收尾孤岛同步的收据。</summary>
+    public IslandSyncReport LastIslandSync => _islands.LastSync;
 
     /// <summary>树域。</summary>
     public NodeTable Table => _table;
@@ -144,6 +154,47 @@ public sealed class RenderPipeline
         $"rebuilds={_extract.Rebuilds} escalated={Escalated} " +
         $"splices={_table.PaintSplices}/{_table.PaintSplices + _table.PaintFullRebuilds} " +
         $"derived={DerivedNodes} down={DownVisits}";
+
+    // ── 孤岛接缝（架构接缝原文：AddIsland(NodeId, IslandKind, IIslandContent)）───────
+
+    /// <summary>
+    /// 登记一个孤岛（渲染平面对外的那个 <c>AddIsland</c>）。三件事一次做完：
+    ///  ① 内容对象进 <see cref="Islands"/>（P7 收尾的同步据它回调）；
+    ///  ② 内容源若是 <see cref="ContentTable"/>，顺手把节点的 <c>contentRef</c> 指向一条孤岛记录——
+    ///     Extract 认的是内容源，不是本表；走 FGB 的宿主不需要这一步（记录已在 blob 里）；
+    ///  ③ 标 <see cref="Ch.Structure"/>：**孤岛准入变化是结构变化**（Ch 词表原文），
+    ///     下一帧整编时它才真的进流。
+    /// </summary>
+    /// <param name="node">孤岛节点。</param>
+    /// <param name="kind">类别（②③④）。</param>
+    /// <param name="content">内容对象。</param>
+    /// <param name="nativeKind">③的具名种类（Spine/DragonBones/Custom）。</param>
+    /// <param name="renderEveryN">RT 分频（1 = 每帧）。</param>
+    /// <param name="debugName">诊断名。</param>
+    /// <returns>交给内容的回调句柄（内容自报脏走它）。</returns>
+    public IslandMount AddIsland(NodeHandle node, IslandKind kind, IIslandContent content,
+        IslandNativeKind nativeKind = IslandNativeKind.None, int renderEveryN = 1, string? debugName = null)
+    {
+        IslandMount mount = _islands.Add(node, kind, content, nativeKind, renderEveryN, debugName);
+        if (_source is ContentTable table)
+            _table.SetContentRef(node, table.Add(_islands.RecordOf(node)));
+        else
+            UiAssert.That(_source.TryDescribe(_table, node, out ContentRecord rec)
+                && rec.Kind == ExtractKind.Island,
+                $"孤岛 {node} 的内容源不是 ContentTable，且它没把该节点描述成孤岛——"
+                + "内容对象登记了却永远不会被整编看见");
+        _invalidation.Mark(node, Ch.Structure, InvalidateReason.UserWrite);
+        return mount;
+    }
+
+    /// <summary>摘掉一个孤岛（内容收一次 <see cref="IIslandContent.OnDetach"/>；节点退回无内容）。</summary>
+    public bool RemoveIsland(NodeHandle node)
+    {
+        if (!_islands.Remove(node)) return false;
+        if (_source is ContentTable) _table.SetContentRef(node, 0u);
+        _invalidation.Mark(node, Ch.Structure, InvalidateReason.UserWrite);
+        return true;
+    }
 
     // ── 接线 ────────────────────────────────────────────────────────────────
 
@@ -237,7 +288,10 @@ public sealed class RenderPipeline
     internal void StepDownLeaf(uint index, Ch channels)
     {
         NodeHandle node = _table.HandleOf(index);
-        if (node.IsNone || _drain.LeafOf(node) < 0) return;   // 不在流里：进/出流是结构的事
+        // 叶与**孤岛**都是下行的落点：机制 9 的第一条随流契约（IslandDesc.visual 并入 worldVisual
+        // 向下排水）在这里兑现——祖先 SetAlpha/Grayed/翻层时孤岛跟随，走的是与叶完全同一条路。
+        // 两者都不在流里 = 进/出流是结构的事，本步无声跳过。
+        if (node.IsNone || (_drain.LeafOf(node) < 0 && _drain.IslandOf(node) < 0)) return;
 
         Ch up = Ch.None;
         if ((channels & (Ch.DownColor | Ch.DownLayer)) != 0) up |= Ch.Color;
@@ -345,7 +399,21 @@ public sealed class RenderPipeline
         // 拖到下一帧惰性重建就会拿新 world 当旧基准（见 StreamDrain.SyncMap）。
         _drain.SyncMap();
 
-        if (!_stream.Handle.IsNone) _stream.AttachIslands(_backend);
+        // 孤岛：先在后端建出本帧的记录，再把挂载事实下发给内容与后端（架构：P7 收尾做孤岛同步）。
+        // 顺序不可换——同步要用的句柄正是 AttachIslands 刚补上的那些。
+        //
+        // 流的**首次** Attach 也挪到这里（M1-23）：它此前在 P8 的 EnsureAttached 里，于是首帧
+        // P7 收尾时 stream.Handle 还是 None，孤岛拿不到后端句柄、那一帧的 SyncIsland 整个丢掉——
+        // 首帧的孤岛只有建岛时的 desc，没有槽矩阵。建流在帧括号内的 P7 合法（后端契约原文：
+        // 流的生命周期跨帧，帧括号只管本帧的提交），且 Attach 只是把整份镜像标脏，P8 的 Submit
+        // 看到的东西一个字节都没变。
+        EnsureAttached();
+        // 每帧都要 AttachIslands，不能只在首次 Attach 时做一次：BeginRebuild 把上一代孤岛句柄
+        // 全拆了（否则 GPU 侧泄漏），重编之后的孤岛是**没有句柄**的新记录——只 attach 一次的接线
+        // 会让重新显示的孤岛此后再也收不到 SyncIsland，症状是「隐藏再显示之后 Spine 不动了」。
+        // 已有句柄的记录在 AttachIslands 里被跳过，所以稳态成本是一次 O(孤岛数) 的空扫。
+        _stream.AttachIslands(_backend);
+        _islands.Sync(_stream, _backend, _table, ctx.FrameId);
     }
 
     // ── P8：提交 ────────────────────────────────────────────────────────────

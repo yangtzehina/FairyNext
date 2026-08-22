@@ -441,21 +441,38 @@ public struct IslandVisual : IEquatable<IslandVisual>
 }
 
 /// <summary>
-/// 孤岛描述（创建期）。孤岛一律**无限盒栅栏**、占一个 run 序；
+/// 孤岛描述（创建期）。孤岛一律**无限盒栅栏**、占一个 run 序（<see cref="PaintOrderIndex"/> 是
+/// 它自己的那一个，不与前后 run 共用）；
 /// <see cref="RenderEveryN"/> &gt; 1 的 RT 型孤岛滞后 N-1 帧是自愿契约（Slate RetainerBox 同型）。
-/// 内容侧接口 <c>IIslandContent</c>（OnAttach / MarkDirty / StillAnimating）归 M1-23，
+/// 内容侧接口 <see cref="IIslandContent"/>（M1-23）由渲染平面消费，
 /// 后端只认这份描述 + 每帧的 <see cref="IslandSync"/>。
 /// </summary>
 public struct IslandDesc
 {
     /// <summary>类别。</summary>
     public IslandKind Kind;
+    /// <summary>③外部原生的具名种类（②④ 恒 <see cref="IslandNativeKind.None"/>）。</summary>
+    public IslandNativeKind NativeKind;
+    /// <summary>④stencil 括号位（②③ 恒 <see cref="IslandBracket.None"/>）。</summary>
+    public IslandBracket Bracket;
+    /// <summary>④stencil 嵌套深度（1 起；即模板 ref 值）。</summary>
+    public int StencilDepth;
+    /// <summary>裁剪下发方式（②的 include/scissor 二分）。</summary>
+    public IslandClipMode ClipMode;
     /// <summary>插在哪个 run 之前（孤岛占一个 run 序）。</summary>
     public int RunBefore;
+    /// <summary>
+    /// 本孤岛独占的绘制序下标（sortingOrder = 本值 × <see cref="Abi.PaintOrderStride"/>）。
+    /// 后端据它对齐外部渲染器的排序（Unity 的 SortingGroup）——**与 run 序同一本账**，
+    /// 序号来源不同的两个渲染器一定会穿插错乱。
+    /// </summary>
+    public int PaintOrderIndex;
     /// <summary>绑定的 transform 槽。</summary>
     public int Slot;
     /// <summary>绑定的 ClipEntry 下标（0 = 无裁剪）。</summary>
     public int ClipIndex;
+    /// <summary>孤岛节点（可见性/父链归属的身份；后端只做诊断用）。</summary>
+    public NodeHandle Node;
     /// <summary>创建时的级联视觉。</summary>
     public IslandVisual Visual;
     /// <summary>RT 分频（1 = 每帧；&gt;1 = 每 N 帧重画一次）。</summary>
@@ -465,7 +482,7 @@ public struct IslandDesc
 }
 
 /// <summary>
-/// 孤岛每帧同步（P7 收尾下发：槽矩阵、visual、clip）。
+/// 孤岛每帧同步（P7 收尾下发：槽矩阵、visual、clip、深度区间）。
 /// <see cref="StillAnimating"/> 是「无失效通道的外部内容自报仍在动」——
 /// 零脏帧短路的合法性判据之一（不变量 13），外部内容不自报就没有跳帧资格。
 /// </summary>
@@ -477,6 +494,10 @@ public struct IslandSync
     public IslandVisual Visual;
     /// <summary>本帧 ClipEntry 下标。</summary>
     public int ClipIndex;
+    /// <summary>本帧裁剪下发方式。</summary>
+    public IslandClipMode ClipMode;
+    /// <summary>本帧绘制序号（= <see cref="IslandDesc.PaintOrderIndex"/> × 步长）。</summary>
+    public int SortingOrder;
     /// <summary>内容自报「仍在动」。</summary>
     public bool StillAnimating;
 }
@@ -599,6 +620,13 @@ public enum DegradeKind : byte
     /// plan.md M2-14 登记实现）。画成拉伸是「近似」，机制 4 禁止；拒发有声，资产一进来就能数到。
     /// </summary>
     Scale9TileUnimplemented = 12,
+
+    /// <summary>
+    /// ④stencil mask 域嵌套超 <see cref="IslandTable.StencilDepthBudget"/> → 该孤岛不进流（M1-23）。
+    /// 模板值回绕的症状是「某些元素随机消失」，与「内容没画」无法区分；第 9 层就有声比
+    /// 等到回绕之后再查便宜一个量级。与槽荒「不画并计数」同一条阶梯。
+    /// </summary>
+    StencilDepthOverflow = 13,
 }
 
 /// <summary>

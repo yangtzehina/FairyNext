@@ -71,6 +71,8 @@ public sealed class RenderStream
     private bool _building;
     private int _currentRun = -1;
     private int _currentSegment = -1;
+    private int _orderCursor = -1;      // 已用掉的最大绘制序下标（run 与孤岛**共用**这一本账）
+    private bool _islandDirty;          // 本帧有孤岛自报脏（BuildStats 消费并清）
     private StreamHandle _handle;
     private readonly string? _debugName;
 
@@ -199,22 +201,28 @@ public sealed class RenderStream
         _islandCount = 0;
         _currentRun = -1;
         _currentSegment = -1;
+        _orderCursor = -1;
         _clips.Reset();
     }
 
     /// <summary>
     /// 开一个 run（栅栏括号）。<paramref name="paintOrderIndex"/> 是绘制序下标——
     /// sortingOrder 由它派生（× <see cref="Abi.PaintOrderStride"/>），流不维护第二本序号账。
-    /// 传 -1 = 上一个 run 的下标 + 1。跨 run 必须严格递增（后端按此校验全序）。
+    /// 传 -1 = **序游标** + 1。跨 run 必须严格递增（后端按此校验全序）。
+    ///
+    /// 序游标而不是「上一个 run 的下标」：孤岛也占一个 run 序（<see cref="AddIsland"/>），
+    /// 它与 run 共用这一本账。看上一个 run 的下标会让孤岛与它后面那个 run 拿到同一个序号——
+    /// 外部渲染器与我们的段就此叠在同一层，穿插错乱只在真机上才看得见。
     /// </summary>
     public int OpenRun(int paintOrderIndex = -1)
     {
         UiAssert.That(_building, "OpenRun 只在 BeginRebuild/EndRebuild 括号内");
         CloseCurrentRun();
 
-        int prev = _runCount > 0 ? _runs[_runCount - 1].PaintOrderIndex : -1;
+        int prev = _orderCursor;
         int index = paintOrderIndex >= 0 ? paintOrderIndex : prev + 1;
         UiAssert.That(index > prev, $"run 的绘制序下标必须严格递增（{prev} → {index}）");
+        _orderCursor = index;
 
         EnsureRuns(_runCount + 1);
         _runs[_runCount] = new RunRecord
@@ -300,6 +308,11 @@ public sealed class RenderStream
 
     /// <summary>
     /// 记一个孤岛：它**关闭当前 run**并占一个 run 序（孤岛一律无限盒栅栏，机制 9）。
+    /// 「占一个 run 序」是字面的——孤岛从与 run 共用的序游标里拿走一个下标
+    /// （<see cref="IslandRecord.PaintOrderIndex"/>），后面那个 run 从再下一个起。
+    /// 于是「孤岛的 sortingOrder 严格介于前后两个 run 之间」是**分配事实**而不是纪律：
+    /// 外部渲染器（Unity SortingGroup）与我们的段读的是同一本序账，穿插错乱在结构上不可能发生。
+    ///
     /// 后端句柄由 <see cref="AttachIslands"/> 在接后端时补上——孤岛的 CPU 记录跨后端存活。
     /// </summary>
     public int AddIsland(in IslandDesc desc)
@@ -308,11 +321,18 @@ public sealed class RenderStream
         UiAssert.That(desc.Kind != IslandKind.None, "孤岛清单是封闭枚举，IslandKind.None 是协议违约");
         if (_currentRun < 0) OpenRun();
 
+        int order = ++_orderCursor;
         EnsureIslands(_islandCount + 1);
         _islands[_islandCount] = new IslandRecord
         {
             Kind = desc.Kind,
+            NativeKind = desc.NativeKind,
+            Bracket = desc.Bracket,
+            StencilDepth = desc.StencilDepth,
+            ClipMode = desc.ClipMode,
+            Node = desc.Node,
             RunBefore = _currentRun + 1,
+            PaintOrderIndex = order,
             Slot = desc.Slot,
             ClipEntry = desc.ClipIndex,
             Visual = desc.Visual,
@@ -326,6 +346,10 @@ public sealed class RenderStream
         _currentSegment = -1;
         return _islandCount++;
     }
+
+    /// <summary>取孤岛记录（越界返回 default）。</summary>
+    public IslandRecord Island(int island) =>
+        (uint)island < (uint)_islandCount ? _islands[island] : default;
 
     /// <summary>收一次整流重编：结构代 +1，段表与全流进上传账。</summary>
     public void EndRebuild()
@@ -548,7 +572,13 @@ public sealed class RenderStream
             _islands[i].Handle = backend.CreateIsland(_handle, new IslandDesc
             {
                 Kind = r.Kind,
+                NativeKind = r.NativeKind,
+                Bracket = r.Bracket,
+                StencilDepth = r.StencilDepth,
+                ClipMode = r.ClipMode,
+                Node = r.Node,
                 RunBefore = r.RunBefore,
+                PaintOrderIndex = r.PaintOrderIndex,
                 Slot = r.Slot,
                 ClipIndex = r.ClipEntry,
                 Visual = r.Visual,
@@ -561,9 +591,10 @@ public sealed class RenderStream
     /// <summary>
     /// P7 收尾的孤岛同步：槽矩阵 / visual / clip 下发。
     /// <paramref name="stillAnimating"/> 是外部内容的自报——没有失效通道的内容不自报就没有跳帧资格
-    /// （不变量 13）。
+    /// （不变量 13）。<paramref name="backend"/> 可为 null：孤岛的 CPU 记录跨后端存活，
+    /// 离线路径（编译器 = 无头运行时）照样要能把 visual 与自报落进记录。
     /// </summary>
-    public void SyncIsland(IRenderBackend backend, int island, in IslandVisual visual, bool stillAnimating)
+    public void SyncIsland(IRenderBackend? backend, int island, in IslandVisual visual, bool stillAnimating)
     {
         if ((uint)island >= (uint)_islandCount)
         {
@@ -579,8 +610,44 @@ public sealed class RenderStream
             SlotMatrix = _slots.Matrix(r.Slot),
             Visual = visual,
             ClipIndex = r.ClipEntry,
+            ClipMode = r.ClipMode,
+            SortingOrder = r.SortingOrder,
             StillAnimating = stillAnimating,
         });
+    }
+
+    /// <summary>
+    /// 写一个孤岛的级联视觉（<see cref="Ch.Color"/>/<see cref="Ch.Visible"/> 通道对孤岛的最小动作：
+    /// 「visual 并入下行」的落点）。写前位等比较，同值返回 false 不脏——
+    /// 与槽写同一条纪律（不变量 16），零脏帧短路以此为前提。
+    /// </summary>
+    public bool SetIslandVisual(int island, in IslandVisual visual)
+    {
+        if ((uint)island >= (uint)_islandCount)
+        {
+            UiAssert.That(false, $"SetIslandVisual 收到越界孤岛下标 {island}");
+            return false;
+        }
+        ref IslandRecord r = ref _islands[island];
+        if (r.Visual.Equals(visual)) return false;
+        r.Visual = visual;
+        return true;
+    }
+
+    /// <summary>
+    /// 孤岛内容自报脏（<see cref="IslandMount.MarkDirty"/> 经 <c>StreamDrain</c> 的落点）：
+    /// 本帧的 <see cref="FrameStats.Dirty"/> 置真，于是零脏帧短路不会把这一帧跳掉。
+    /// **不动任何实例字节**——外部内容的像素不由我们产生，我们只负责不跳过它那一帧。
+    /// </summary>
+    public bool MarkIslandDirty(int island)
+    {
+        if ((uint)island >= (uint)_islandCount)
+        {
+            UiAssert.That(false, $"MarkIslandDirty 收到越界孤岛下标 {island}");
+            return false;
+        }
+        _islandDirty = true;
+        return true;
     }
 
     /// <summary>是否有孤岛自报仍在动（零脏帧短路的第三个前提）。</summary>
@@ -721,24 +788,32 @@ public sealed class RenderStream
     /// <c>UploadBytes</c> 只算有 ABI 尺寸常量的两项（实例 + 裁剪条目）——
     /// 槽数组与段属性块的字节口径各后端不同，那部分的账归后端自己记。
     /// </summary>
-    public FrameStats BuildStats(ulong frameId, in SubmitReport report) => new FrameStats
+    public FrameStats BuildStats(ulong frameId, in SubmitReport report)
     {
-        FrameId = frameId,
-        QuadCount = _quadCount,
-        RunCount = _runCount,
-        SegSwitches = _segCount,
-        UploadBytes = report.Quads * Abi.QuadInstanceSize + report.Clips * Abi.ClipEntrySize,
-        Recaptures = 0,
-        IslandCount = _islandCount,
-        Dirty = report.Calls > 0 || AnyIslandAnimating(),
-    };
+        // 孤岛自报脏是**帧锁存量**：本方法是 P8 里那一次唯一的读点，读完即清。
+        // 留到下一帧会让一次 MarkDirty 换两帧 present（外部内容的脏没有第二个消费者能清它）。
+        bool islandDirty = _islandDirty;
+        _islandDirty = false;
+        return new FrameStats
+        {
+            FrameId = frameId,
+            QuadCount = _quadCount,
+            RunCount = _runCount,
+            SegSwitches = _segCount,
+            UploadBytes = report.Quads * Abi.QuadInstanceSize + report.Clips * Abi.ClipEntrySize,
+            Recaptures = 0,
+            IslandCount = _islandCount,
+            Dirty = report.Calls > 0 || AnyIslandAnimating() || islandDirty,
+        };
+    }
 
     /// <summary>
     /// 定格一份只读快照（六个数组全部拷贝）。与 <c>MockBackend.Snapshot</c> 的对拍是一条门：
     /// **后端收到的字节必须等于镜像持有的字节**。
     /// </summary>
     public StreamSnapshot Snapshot() => new StreamSnapshot(
-        Quads, BaseColors, _clips.Entries, _slots.Entries, Segments, BuildRunOrders(), _structEpoch, _debugName);
+        Quads, BaseColors, _clips.Entries, _slots.Entries, Segments, BuildRunOrders(), _structEpoch, _debugName,
+        Islands);
 
     /// <summary>
     /// 派生序（= paintOrder 下标 × <see cref="Abi.PaintOrderStride"/>）。

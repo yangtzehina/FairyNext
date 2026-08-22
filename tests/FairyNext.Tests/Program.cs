@@ -79,6 +79,13 @@ public static partial class Program
                              // 21 列逐位 + resolved 逐位 + Extract 的 CanonicalStream 逐字节）；
                              // **fuzz 转常设门**（2048 变体 seed 固定，语料含十一种段内记录），
                              // 用例在 FgbLoadTests.cs（partial）
+        IslandSuite();       // M1-23 孤岛②③④：AddIsland/IIslandContent（OnAttach/OnSync/MarkDirty/
+                             // StillAnimating）+ visual 并入下行（含隐藏祖先下整只离开流）+
+                             // ②材质 clip include 与 scissor 降级有声 + ③SortingGroup 序与 run 序同源
+                             // （穿插场景）与 Spine 具名 kind + ④stencil 括号成对/嵌套 LIFO/深度阶梯 +
+                             // P7 收尾 SyncIsland；另结两笔 2026-08 审计遗留账（**零脏帧第三前提**
+                             // 正例与短路恢复收据、**孤岛表进规范形**逐字段 + 分配序重编号 + 增量门红灯），
+                             // 用例在 IslandTests.cs（partial）
         EventSuite();        // M1-21 事件平面：命中（迭代下行 / 上帧序 / local⊗slotMatrix / clip 剪枝 /
                              // 1bit 位图）+ 链快照派发与句柄双验 + downChain click + CaptureTouch/monitor
                              // + P0 接线与相位纪律；另结两笔 2026-08 审计遗留账（DownLayer 覆盖与裁决、

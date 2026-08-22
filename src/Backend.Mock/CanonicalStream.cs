@@ -26,6 +26,8 @@ public enum CanonicalSection : byte
     BaseColor = 7,
     /// <summary>越过规范形末尾（= 两条流长度不同）。</summary>
     Beyond = 8,
+    /// <summary>孤岛挂载表（M1-23；写在 run 序之后、structEpoch 之前）。</summary>
+    Islands = 9,
 }
 
 /// <summary>
@@ -73,9 +75,12 @@ public readonly struct CanonicalSite
 ///  2. **未被引用的槽/clip 条目**：分配残留不进哈希（残留条目再多也不改一个像素）；
 ///  3. <c>SlotEntry.Owner</c>（NodeHandle 含代际位）与 <c>WriteFreq</c>（升格侦测计数）；
 ///  4. <c>ClipEntry._pad</c>（契约恒零）与 <c>route</c> 的保留位；
-///  5. 后端原生句柄与 <c>DebugName</c>（后者只是给人看的）。
+///  5. 后端原生句柄与 <c>DebugName</c>（后者只是给人看的）；
+///  6. 孤岛的 <c>Node</c>（含代际的句柄）与 <c>StillAnimating</c>（内容对**本帧**的自报——
+///     帧内量，不是流状态；进哈希会让「全量重建腿从没同步过孤岛」变成一次假红）。
 /// 保留的都是能改像素的：rect/uv/color/flags/aux/extra、槽矩阵与 axisAligned 位、
-/// clip 的 rect/soft/radii 与它绑的槽、段键与区间、run 序、structEpoch、baseColor。
+/// clip 的 rect/soft/radii 与它绑的槽、段键与区间、run 序、**孤岛的类别/括号/序/裁剪方式/
+/// 分频/槽/域/级联视觉**、structEpoch、baseColor。
 ///
 /// ── 为什么是「字节 + 哈希」而不是只有哈希 ──────────────────────────────────
 /// 哈希只回答「一样吗」；门失败时要回答「哪儿不一样」。同一份规范化字节两用，
@@ -90,8 +95,13 @@ public static class CanonicalStream
     /// <summary>规范形魔数（"FNXS"）。</summary>
     public const uint Magic = 0x53584E46;
 
-    /// <summary>规范形版本。**改布局必 bump**：金样按版本解释字节。</summary>
-    public const byte FormatVersion = 1;
+    /// <summary>
+    /// 规范形版本。**改布局必 bump**：金样按版本解释字节。
+    /// v2（M1-23）：run 序之后插入**孤岛表**——孤岛挂载记录此前不在规范化范围内，
+    /// 于是增量门在孤岛维度上是空的（改一个孤岛的 visual、槽、裁剪方式，两腿的字节都不动），
+    /// 而槽/clip 的分配序漂移到了孤岛身上又会被误报成差异。两个方向的错都由这一段封住。
+    /// </summary>
+    public const byte FormatVersion = 2;
 
     /// <summary>规范化字节（同画面同字节）。</summary>
     public static byte[] Canonicalize(StreamSnapshot snapshot)
@@ -105,6 +115,7 @@ public static class CanonicalStream
         ReadOnlySpan<QuadInstance> quads = snapshot.Quads;
         ReadOnlySpan<SlotEntry> slots = snapshot.Slots;
         ReadOnlySpan<ClipEntry> clips = snapshot.Clips;
+        ReadOnlySpan<IslandRecord> islands = snapshot.Islands;
 
         // 首用序重编号：槽 0（identity）与 clip 0（None 哨兵）恒占规范 id 0。
         var slotMap = new Renumber(slots.Length);
@@ -128,6 +139,15 @@ public static class CanonicalStream
             int clipId = clipMap.Claim((int)q.ClipIndex);
             w.I32(slotMap.Claim((int)q.SlotIndex));
             w.I32(clipId);
+        }
+
+        // 孤岛也引用槽与裁剪条目，且它的引用**必须在这里认领**（写槽表/clip 表之前）：
+        // 一个只被孤岛引用的槽若拖到孤岛段才认领，槽表的条数就与已写下的 count 对不上。
+        // 认领序 = quad 序 → 孤岛序，两腿同源（Extract 对两者的发射序一致），故规范 id 稳定。
+        for (int i = 0; i < islands.Length; i++)
+        {
+            clipMap.Claim(islands[i].ClipEntry);
+            slotMap.Claim(islands[i].Slot);
         }
 
         // 被引用的 clip 所绑的槽也要进规范编号，而且必须在写槽表**之前**全部认领完——
@@ -182,6 +202,28 @@ public static class CanonicalStream
             w.I32(runs[i].SortingOrder);
         }
 
+        // 孤岛表（M1-23）。**剔除三样非语义位**：Node（含代际的句柄，同 SlotEntry.Owner 的理由）、
+        // Handle（后端原生句柄）、StillAnimating（内容对本帧的自报——它是帧内量不是流状态，
+        // 进哈希会让「全量重建腿从没同步过孤岛」变成一次假红）。DebugName 同样不是像素。
+        w.I32(islands.Length);
+        for (int i = 0; i < islands.Length; i++)
+        {
+            IslandRecord e = islands[i];
+            w.U8((byte)e.Kind);
+            w.U8((byte)e.NativeKind);
+            w.U8((byte)e.Bracket);
+            w.U8((byte)e.ClipMode);
+            w.I32(e.StencilDepth);
+            w.I32(e.RunBefore);
+            w.I32(e.PaintOrderIndex);
+            w.I32(e.RenderEveryN);
+            w.I32(slotMap.Claim(e.Slot));
+            w.I32(clipMap.Claim(e.ClipEntry));
+            w.F32(e.Visual.Alpha);
+            w.U8(e.Visual.Visible ? (byte)1 : (byte)0);
+            w.U8(e.Visual.Grayed ? (byte)1 : (byte)0);
+        }
+
         w.U32(snapshot.StructEpoch);
 
         ReadOnlySpan<uint> baseColor = snapshot.BaseColor;
@@ -220,6 +262,7 @@ public static class CanonicalStream
     private const int ClipBytes = 16 + 8 + 16 + 4;
     private const int SegmentBytes = 4 * 4 + 1 + 1 + 4 * 3;
     private const int RunBytes = 8;
+    private const int IslandBytes = 4 + 4 * 6 + 4 + 2;
 
     /// <summary>
     /// 把 <see cref="FirstDifference"/> 给的字节偏移翻译成「哪个分区的哪个字段、该由哪条通道负责」。
@@ -285,6 +328,30 @@ public static class CanonicalStream
         }
         at -= runBytes;
 
+        if (at < 4) return new CanonicalSite(CanonicalSection.Islands, 0, "count", Ch.Structure);
+        at -= 4;
+        int islandBytes = snapshot.Islands.Length * IslandBytes;
+        if (at < islandBytes)
+        {
+            int i = at / IslandBytes, f = at % IslandBytes;
+            // 字段 → 通道：类别/括号/序/分频/裁剪域是整编的产物（结构）；槽是变换与结构共管；
+            // visual 三元是 Color/Visible 两条通道的级联落点（「visual 并入下行」的落款）。
+            string field =
+                f < 4 ? "kind/native/bracket/clipMode"
+                : f < 8 ? "stencilDepth"
+                : f < 16 ? "order"
+                : f < 20 ? "renderEveryN"
+                : f < 24 ? "slot"
+                : f < 28 ? "clip"
+                : "visual";
+            Ch channel = f < 20 ? Ch.Structure
+                : f < 24 ? (Ch.Structure | Ch.Transform)
+                : f < 28 ? Ch.Structure
+                : (Ch.Color | Ch.Visible);
+            return new CanonicalSite(CanonicalSection.Islands, i, field, channel);
+        }
+        at -= islandBytes;
+
         if (at < 4) return new CanonicalSite(CanonicalSection.Epoch, 0, "structEpoch", Ch.Structure);
         at -= 4;
 
@@ -317,6 +384,7 @@ public static class CanonicalStream
     {
         ReadOnlySpan<QuadInstance> quads = snapshot.Quads;
         ReadOnlySpan<ClipEntry> clips = snapshot.Clips;
+        ReadOnlySpan<IslandRecord> islands = snapshot.Islands;
         var slotMap = new Renumber(snapshot.Slots.Length);
         var clipMap = new Renumber(clips.Length);
         slotMap.Claim(0);
@@ -325,6 +393,11 @@ public static class CanonicalStream
         {
             clipMap.Claim((int)quads[i].ClipIndex);
             slotMap.Claim((int)quads[i].SlotIndex);
+        }
+        for (int i = 0; i < islands.Length; i++)
+        {
+            clipMap.Claim(islands[i].ClipEntry);
+            slotMap.Claim(islands[i].Slot);
         }
         for (int id = 0; id < clipMap.Count; id++)
         {

@@ -108,6 +108,10 @@ public sealed class IncrementalGate
     {
         _oracleExtract.PanelRoot = _liveExtract.PanelRoot;
         _oracleExtract.PruneAfterRebuild = _liveExtract.PruneAfterRebuild;
+        // 孤岛登记表必须是**同一张**：整编要问它两样东西（③的具名种类、②的 clip include 声明），
+        // 两腿各拿一张表就会在 clipMode 上分叉，而那正是本门要比的字段之一。
+        // 整编只读表、不调内容回调（回调在 P7 收尾的同步里），所以神谕腿多跑一遍不会惊动内容。
+        _oracleExtract.Islands = _liveExtract.Islands;
         _oracleExtract.Rebuild();
         // 镜像**管线**而不是镜像开关（2026-08 审计：剪枝的唯一落点在 RenderPipeline.DrainTail 尾，
         // 神谕腿只同步 Extract.PruneAfterRebuild 的话，关掉那个开关就让门假红——活流被尾剪枝
@@ -135,5 +139,6 @@ public sealed class IncrementalGate
 
     /// <summary>structEpoch 归零后的快照：代数是「编过几次」，不是画面。</summary>
     private static StreamSnapshot Normalize(RenderStream s) => new StreamSnapshot(
-        s.Quads, s.BaseColors, s.Clips.Entries, s.Slots.Entries, s.Segments, s.BuildRunOrders(), 0u, null);
+        s.Quads, s.BaseColors, s.Clips.Entries, s.Slots.Entries, s.Segments, s.BuildRunOrders(), 0u, null,
+        s.Islands);
 }

@@ -228,11 +228,17 @@ public static partial class Program
         stream.EndRebuild();
 
         RunOrder[] orders = stream.BuildRunOrders();
+        IslandRecord rec = stream.Island(island);
+        // M1-23 起「占一个 run 序」是字面的：孤岛从与 run 共用的序游标里拿走下标 1，
+        // 于是它后面那个 run 从 2 起。孤岛的序号因此**严格介于**前后两个 run 之间——
+        // 外部渲染器（SortingGroup）与我们的段读同一本序账，穿插错乱在结构上不可能发生。
         Check("机制 2/9: 孤岛关闭 run 且占一个 run 序；sortingOrder = paintOrder 下标 × 16 派生",
             island == 0 && stream.RunCount == 2 && stream.Runs[0].ClosedByIsland == 0
             && stream.Runs[1].ClosedByIsland == -1
             && orders.Length == 2 && orders[0].SortingOrder == 0
-            && orders[1].SortingOrder == Abi.PaintOrderStride
+            && orders[1].SortingOrder == 2 * Abi.PaintOrderStride
+            && rec.PaintOrderIndex == 1 && rec.SortingOrder == Abi.PaintOrderStride
+            && rec.SortingOrder > orders[0].SortingOrder && rec.SortingOrder < orders[1].SortingOrder
             && stream.SegmentCount == 2);   // run 边界一律切段
     }
 
