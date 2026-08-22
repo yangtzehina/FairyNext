@@ -77,13 +77,21 @@ internal static class TreeBuilder
             text.Attach(layout);
         }
 
-        table.SetSize(table.Root, comp.SourceWidth, comp.SourceHeight);
+        // 组件根是**世界树根的孩子**，不是世界树根本身（M1-22 修正）。理由有两条，第二条是硬的：
+        //  ① 形态对齐运行期——一个组件实例在真宿主里永远是某棵树里的一棵子树，
+        //     编译世界让它当树根就是让编译面和运行面在结构上不同源；
+        //  ② 模板的节点区间因此**不从槽 1 起**（根在槽 2），于是 NODE 拓扑列的相对化
+        //     （`FgbFreezer.Relativize`）在真语料上不再是数值恒等——M1-20b 记在案的那条
+        //     「摘掉相对化调用不可观测」的存活变异，从此有门管得住。
+        NodeHandle compRoot = table.CreateNode(NodeType.Component, 0);
+        table.AddChild(table.Root, compRoot);
+        table.SetSize(compRoot, comp.SourceWidth, comp.SourceHeight);
 
         // ── ② 节点与结构 ────────────────────────────────────────────────────
         FuiChild[] children = comp.Children;
         int n = children.Length;
         var nodes = new NodeHandle[n + 1];
-        nodes[0] = table.Root;
+        nodes[0] = compRoot;
         var editorIds = new string?[n + 1];
         var byEditorId = new Dictionary<string, ushort>(n, StringComparer.Ordinal);
 

@@ -1,8 +1,10 @@
-memory-plan blob=12000B sections=11 components=9
+memory-plan blob=12672B sections=14 components=9
   section STRT 1002B strings=72 pool=410B
   section TREF 16B records=1×16B
-  section COMP 864B records=9×96B
+  section DEPS 0B records=0×16B
+  section COMP 936B records=9×104B
   section NODE 4192B nodes=52 cols=21 bytesPerNode=80
+  section PLAN 432B steps=27×16B
   section CONT 1040B records=13×80B
   section LOCL 832B records=52×16B
   section CNST 392B ops=11
@@ -10,15 +12,16 @@ memory-plan blob=12000B sections=11 components=9
   section SEGS 192B records=6×32B
   section LEAF 600B records=15×40B
   section CLIP 432B records=9×48B
-  component Page nodes=10 quads=3 segs=1 leaves=3 clips=1 ops=0 slots=2 instanceBytes=16 pool=816B
-  component Button1 nodes=5 quads=4 segs=1 leaves=4 clips=1 ops=8 slots=4 instanceBytes=16 pool=416B
-  component Pages nodes=3 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 instanceBytes=16 pool=256B
-  component Book nodes=8 quads=4 segs=1 leaves=4 clips=1 ops=0 slots=0 instanceBytes=16 pool=656B
-  component FrontCover nodes=9 quads=5 segs=1 leaves=2 clips=1 ops=0 slots=1 instanceBytes=16 pool=736B
-  component BackCover nodes=6 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 instanceBytes=16 pool=496B
-  component Slider2 nodes=4 quads=9 segs=1 leaves=1 clips=1 ops=3 slots=2 instanceBytes=16 pool=336B
-  component Slider2_grip nodes=2 quads=1 segs=1 leaves=1 clips=1 ops=0 slots=0 instanceBytes=16 pool=176B
-  component Main nodes=5 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 instanceBytes=16 pool=416B
+  section PTCH 96B records=6×16B
+  component Page nodes=10 quads=3 segs=1 leaves=3 clips=1 ops=0 slots=2 plan=1 instanceBytes=16 pool=816B
+  component Button1 nodes=5 quads=4 segs=1 leaves=4 clips=1 ops=8 slots=4 plan=1 instanceBytes=16 pool=416B
+  component Pages nodes=3 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 plan=3 instanceBytes=16 pool=256B
+  component Book nodes=8 quads=4 segs=1 leaves=4 clips=1 ops=0 slots=0 plan=6 instanceBytes=16 pool=656B
+  component FrontCover nodes=9 quads=5 segs=1 leaves=2 clips=1 ops=0 slots=1 plan=1 instanceBytes=16 pool=736B
+  component BackCover nodes=6 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 plan=1 instanceBytes=16 pool=496B
+  component Slider2 nodes=4 quads=9 segs=1 leaves=1 clips=1 ops=3 slots=2 plan=2 instanceBytes=16 pool=336B
+  component Slider2_grip nodes=2 quads=1 segs=1 leaves=1 clips=1 ops=0 slots=0 plan=1 instanceBytes=16 pool=176B
+  component Main nodes=5 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 plan=11 instanceBytes=16 pool=416B
   pool-budget total=4304B nodes=52 nodeBytes=4160B
   canonical strings=72/119 content=13/16 texrefs=1/1
   mask observable=0/64 (BIND 未进 M1 编译面) Layout=2/63 Visual=5/32 Text=2/32 Transform=7/32

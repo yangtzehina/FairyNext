@@ -71,6 +71,14 @@ public static partial class Program
                              // 逐字节，六包 25 组件）**、**FGB 读回 sanity（NODE/COMP/CNST/LOCL/
                              // STRT/LEAF 逐段与原树对账）**；另有 canonical 后置扫描（不变量 8）、
                              // 内存计划断言锚、冻结前置门 FGM903，用例在 CompilerFreezeTests.cs（partial）
+        FgbLoadSuite();      // M1-22 装载三操作 + 同步实例化：验证（门 1-5 全上线，结构性拒载 vs
+                             // 哈希级降级的**二分**）/ 视图（段 Cast 零拷贝）/ 绑定（TREF 符号 +
+                             // **PTCH 装载期回填** + CONT/纹理懒绑）；PLAN 后序实例化（顶层块 +
+                             // 嵌套 slab + 逐列 memcpy + 基址回填 + arm-not-mount）；Pool 雏形；
+                             // **等价性金样第三条腿**（FGB 装载实例化出的树 == TreeBuilder 的树：
+                             // 21 列逐位 + resolved 逐位 + Extract 的 CanonicalStream 逐字节）；
+                             // **fuzz 转常设门**（2048 变体 seed 固定，语料含十一种段内记录），
+                             // 用例在 FgbLoadTests.cs（partial）
         EventSuite();        // M1-21 事件平面：命中（迭代下行 / 上帧序 / local⊗slotMatrix / clip 剪枝 /
                              // 1bit 位图）+ 链快照派发与句柄双验 + downChain click + CaptureTouch/monitor
                              // + P0 接线与相位纪律；另结两笔 2026-08 审计遗留账（DownLayer 覆盖与裁决、

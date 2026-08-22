@@ -6,8 +6,8 @@
 
 | 文件 | 是什么 | diff 时看什么 |
 |---|---|---|
-| `<包名>.fgb` | `FgbCompiler.Compile` 的发布物（十一段：STRT/TREF/COMP/NODE/CONT/LOCL/CNST/QUAD/SEGS/LEAF/CLIP） | 只回答「变没变」，首差异字节偏移由用例打印 |
-| `<包名>.plan.txt` | 同一次编译的 `MemoryPlan` + `ReactiveGraph`（架构机制 11 + 平面六「编译产物 golden」） | 回答「**哪个段、哪个组件**变了」——段字节、逐组件 nodes/quads/segs/leaves/ops/pool、canonical 去重率、掩码占用率、CNST 拓扑序 |
+| `<包名>.fgb` | `FgbCompiler.Compile` 的发布物（**十四段**，规范段序：STRT/TREF/DEPS/COMP/NODE/PLAN/CONT/LOCL/CNST/QUAD/SEGS/LEAF/CLIP/PTCH） | 只回答「变没变」，首差异字节偏移由用例打印 |
+| `<包名>.plan.txt` | 同一次编译的 `MemoryPlan` + `ReactiveGraph`（架构机制 11 + 平面六「编译产物 golden」） | 回答「**哪个段、哪个组件**变了」——段字节、逐组件 nodes/quads/segs/leaves/ops/plan/pool、canonical 去重率、掩码占用率、CNST 拓扑序 |
 
 二进制基线单独存在的理由：段序、canonical 的登记序、字符串池排布都是产物的一部分，
 在 `.plan.txt` 里看不见。两份一起入库，是因为「变了」和「哪儿变了」需要两种不同的证据。
@@ -40,4 +40,12 @@ blob 里的文本叶几何来自编译期度量，度量吃的是用例侧合成
 （`SynthFontT()`，见 `TextGlyphTests.cs`）——**改那个字体会改这里的基线**，这是预期行为：
 字体度量进产物，产物就该在字体变时现形。四维身份里的 `scaleLevel`/`branchId` 取
 `ShapeOpts()` 的 `(1, 0)`；`combinedRefHash` 恒零（单包编译面给不出链上包的 sourceHash，
-见 FGM304），故基线不随依赖包变化。
+见 FGM304），故基线不随依赖包变化；DEPS 段写条目但期望哈希留零，同理。
+
+## 会改动基线的两类跨包改动（M1-22 起）
+
+1. **格式版本 / 段集**：`Abi.FgbFormatVersion` bump 或新增段，整批基线必变（M1-22 从 v1 到 v2：
+   PLAN/PTCH/DEPS 三段进驻、COMP 96B→104B、头切 `pkgId`）。
+2. **编译世界的树形**：M1-22 把组件根从「无头世界的树根」改成「树根的孩子」，模板区间自此从槽 2 起，
+   NODE 拓扑列的相对化值随之整体偏移——这正是相对化不再是数值恒等的那一步，
+   改回去会让全部装载用例与这里的基线一起红。

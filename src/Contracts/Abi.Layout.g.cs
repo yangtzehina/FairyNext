@@ -19,7 +19,7 @@ public static class AbiLayout
     /// <summary>"FGB1" little-endian；头首 4 字节，不符即拒载</summary>
     public const uint FgbMagic = 0x31424746u;
     /// <summary>精确匹配，不匹配 = 结构性拒载（不降级）</summary>
-    public const int FgbFormatVersion = 1;
+    public const int FgbFormatVersion = 2;
     /// <summary>段 16B 对齐，定长记录 Cast 直读</summary>
     public const int FgbSectionAlignment = 16;
     /// <summary>bytes/实例；实例缓冲 stride</summary>
@@ -301,9 +301,12 @@ public static class AbiLayout
     /// <summary>sectionCount @44 +4：段目录条目数（目录紧随头部）</summary>
     public const int FgbHeaderSectionCountOffset = 44;
     public const int FgbHeaderSectionCountSize = 4;
-    /// <summary>_reserved1 @48 +16：保留，写零（append-only：新字段从此处切）</summary>
-    public const int FgbHeaderReserved1Offset = 48;
-    public const int FgbHeaderReserved1Size = 16;
+    /// <summary>pkgId @48 +8：包 id 字符串的 FNV-1a 64（M1-22 从 v1 保留区切；装载门 5 的对照物——**以 id 定身份，不以名字**）</summary>
+    public const int FgbHeaderPkgIdOffset = 48;
+    public const int FgbHeaderPkgIdSize = 8;
+    /// <summary>_reserved1 @56 +8：保留，写零（append-only：新字段从此处切）</summary>
+    public const int FgbHeaderReserved1Offset = 56;
+    public const int FgbHeaderReserved1Size = 8;
 
     // ---- SectionDir 条目字段（24B；装载门 2 的读口） ----
     /// <summary>fourcc @0 +4：段 id（FgbSectionIds）；未知 fourcc 整段跳过——前向兼容只保留在段粒度</summary>
@@ -403,7 +406,7 @@ public static class AbiLayout
     public const int NodeColPrevSib = 3;
     public const int NodeColPrevSibSize = 4;
     public const bool NodeColPrevSibRebase = true;
-    /// <summary>[4] +4（rebase：段内相对下标，实例化加基址回填）：所属组件实例节点下标</summary>
+    /// <summary>[4] +4（rebase：段内相对下标，实例化加基址回填）：所属组件实例节点下标（**实例身份列**：模板里恒 0，实例化按块回填为块首下标）</summary>
     public const int NodeColOwnerInst = 4;
     public const int NodeColOwnerInstSize = 4;
     public const bool NodeColOwnerInstRebase = true;
@@ -472,7 +475,7 @@ public static class AbiLayout
     public const int NodeColResolvedRefSize = 4;
     public const bool NodeColResolvedRefRebase = false;
 
-    // ---- FgbComp 字段（96B）：COMP 记录（组件模板的全段区间） ----
+    // ---- FgbComp 字段（104B）：COMP 记录（组件模板的全段区间） ----
     /// <summary>nameStr @0 +4：组件名在 STRT 的下标</summary>
     public const int FgbCompNameStrOffset = 0;
     public const int FgbCompNameStrSize = 4;
@@ -542,15 +545,21 @@ public static class AbiLayout
     /// <summary>ctrlCount @88 +2：控制器数（M1 恒 0——BIND 归 M2 状态层）</summary>
     public const int FgbCompCtrlCountOffset = 88;
     public const int FgbCompCtrlCountSize = 2;
-    /// <summary>flags @90 +2：位域：bit0 有约束图 | bit1 有文本叶</summary>
+    /// <summary>flags @90 +2：位域：bit0 有约束图 | bit1 有文本叶 | bit2 有嵌套子组件步</summary>
     public const int FgbCompFlagsOffset = 90;
     public const int FgbCompFlagsSize = 2;
-    /// <summary>_reserved @92 +4：保留，写零（append-only：新字段从此切）</summary>
-    public const int FgbCompReservedOffset = 92;
+    /// <summary>planStart @92 +4：PLAN 段内步起点（M1-22：从 v1 的保留区切）</summary>
+    public const int FgbCompPlanStartOffset = 92;
+    public const int FgbCompPlanStartSize = 4;
+    /// <summary>planCount @96 +4：步数（≥1；末步 = 本组件的顶层步，后序性质）</summary>
+    public const int FgbCompPlanCountOffset = 96;
+    public const int FgbCompPlanCountSize = 4;
+    /// <summary>_reserved @100 +4：保留，写零（append-only：新字段从此切）</summary>
+    public const int FgbCompReservedOffset = 100;
     public const int FgbCompReservedSize = 4;
 
     /// <summary>COMP 记录（组件模板的全段区间） —— 记录定长。</summary>
-    public const int FgbCompSize = 96;
+    public const int FgbCompSize = 104;
 
     // ---- FgbCont 字段（80B）：CONT 记录（内容条目 = contentRef 的目标） ----
     /// <summary>kind @0 +2：0 = 无内容（哨兵 0 号记录）| 1 = 叶 | 2 = 孤岛（M1-23）</summary>
@@ -775,6 +784,60 @@ public static class AbiLayout
     /// <summary>CNST 段头（四段数组总长） —— 记录定长。</summary>
     public const int FgbCnstHeaderSize = 16;
 
+    // ---- FgbPlan 字段（16B）：PLAN 记录（后序扁平实例化步） ----
+    /// <summary>compIndex @0 +4：COMP 段内组件下标（本包内）；跨包模板归 DEPS/TREF，M1 不产</summary>
+    public const int FgbPlanCompIndexOffset = 0;
+    public const int FgbPlanCompIndexSize = 4;
+    /// <summary>parentStep @4 +4：宿主步下标（顶层步 = FgbPlanNoParent）；后序 ⇒ parentStep &gt; 自身</summary>
+    public const int FgbPlanParentStepOffset = 4;
+    public const int FgbPlanParentStepSize = 4;
+    /// <summary>kind @8 +2：FgbPlanKindRoot = 顶层块 | FgbPlanKindNested = 嵌套子组件</summary>
+    public const int FgbPlanKindOffset = 8;
+    public const int FgbPlanKindSize = 2;
+    /// <summary>hostLocalId @10 +2：在宿主组件内的挂载点 localId（嵌套步有效，顶层步写零）</summary>
+    public const int FgbPlanHostLocalIdOffset = 10;
+    public const int FgbPlanHostLocalIdSize = 2;
+    /// <summary>listItemCount @12 +2：GList 首屏 item 数（M1 恒 0——虚拟列表归 M2-07）</summary>
+    public const int FgbPlanListItemCountOffset = 12;
+    public const int FgbPlanListItemCountSize = 2;
+    /// <summary>flags @14 +2：保留，写零</summary>
+    public const int FgbPlanFlagsOffset = 14;
+    public const int FgbPlanFlagsSize = 2;
+
+    /// <summary>PLAN 记录（后序扁平实例化步） —— 记录定长。</summary>
+    public const int FgbPlanSize = 16;
+
+    // ---- FgbPatch 字段（16B）：PTCH 记录（装载期纹理身份回填） ----
+    /// <summary>texRef @0 +4：TREF 段内下标（要绑定的纹理符号）</summary>
+    public const int FgbPatchTexRefOffset = 0;
+    public const int FgbPatchTexRefSize = 4;
+    /// <summary>target @4 +4：目标记录在其段内的下标</summary>
+    public const int FgbPatchTargetOffset = 4;
+    public const int FgbPatchTargetSize = 4;
+    /// <summary>section @8 +2：FgbPatchSectionCont = CONT.texId | FgbPatchSectionSegs = SEGS.tex[slot]</summary>
+    public const int FgbPatchSectionOffset = 8;
+    public const int FgbPatchSectionSize = 2;
+    /// <summary>slot @10 +2：SEGS 的纹理槽 0..3（CONT 目标恒 0）</summary>
+    public const int FgbPatchSlotOffset = 10;
+    public const int FgbPatchSlotSize = 2;
+    /// <summary>_reserved @12 +4：保留，写零</summary>
+    public const int FgbPatchReservedOffset = 12;
+    public const int FgbPatchReservedSize = 4;
+
+    /// <summary>PTCH 记录（装载期纹理身份回填） —— 记录定长。</summary>
+    public const int FgbPatchSize = 16;
+
+    // ---- FgbDep 字段（16B）：DEPS 记录（依赖包引用；装载门 4） ----
+    /// <summary>pkgId @0 +8：依赖包 id 字符串的 FNV-1a 64</summary>
+    public const int FgbDepPkgIdOffset = 0;
+    public const int FgbDepPkgIdSize = 8;
+    /// <summary>expectedSourceHash @8 +8：期望的被引用包 sourceHash（0 = 未知，见上）</summary>
+    public const int FgbDepExpectedSourceHashOffset = 8;
+    public const int FgbDepExpectedSourceHashSize = 8;
+
+    /// <summary>DEPS 记录（依赖包引用；装载门 4） —— 记录定长。</summary>
+    public const int FgbDepSize = 16;
+
     // ---- 编译期断言：字段首尾相接、末字段收口于结构尺寸、位域覆盖全 32 位 ----
     // 不成立即 1/0 → CS0020 编译错（L0 门：错误在跑起来之前死掉）。
     private const int AssertQuadRect = 1 / ((QuadRectOffset + QuadRectSize == QuadUvAOffset) ? 1 : 0);
@@ -817,7 +880,8 @@ public static class AbiLayout
     private const int AssertFgbHeaderCombinedRefHash = 1 / ((FgbHeaderCombinedRefHashOffset + FgbHeaderCombinedRefHashSize == FgbHeaderScaleLevelOffset) ? 1 : 0);
     private const int AssertFgbHeaderScaleLevel = 1 / ((FgbHeaderScaleLevelOffset + FgbHeaderScaleLevelSize == FgbHeaderBranchIdOffset) ? 1 : 0);
     private const int AssertFgbHeaderBranchId = 1 / ((FgbHeaderBranchIdOffset + FgbHeaderBranchIdSize == FgbHeaderSectionCountOffset) ? 1 : 0);
-    private const int AssertFgbHeaderSectionCount = 1 / ((FgbHeaderSectionCountOffset + FgbHeaderSectionCountSize == FgbHeaderReserved1Offset) ? 1 : 0);
+    private const int AssertFgbHeaderSectionCount = 1 / ((FgbHeaderSectionCountOffset + FgbHeaderSectionCountSize == FgbHeaderPkgIdOffset) ? 1 : 0);
+    private const int AssertFgbHeaderPkgId = 1 / ((FgbHeaderPkgIdOffset + FgbHeaderPkgIdSize == FgbHeaderReserved1Offset) ? 1 : 0);
     private const int AssertFgbHeaderReserved1 = 1 / ((FgbHeaderReserved1Offset + FgbHeaderReserved1Size == FgbHeaderSize) ? 1 : 0);
     private const int AssertFgbDirFourcc = 1 / ((FgbDirFourccOffset + FgbDirFourccSize == FgbDirReservedOffset) ? 1 : 0);
     private const int AssertFgbDirReserved = 1 / ((FgbDirReservedOffset + FgbDirReservedSize == FgbDirOffsetOffset) ? 1 : 0);
@@ -850,7 +914,9 @@ public static class AbiLayout
     private const int AssertFgbCompSourceWidth = 1 / ((FgbCompSourceWidthOffset + FgbCompSourceWidthSize == FgbCompSourceHeightOffset) ? 1 : 0);
     private const int AssertFgbCompSourceHeight = 1 / ((FgbCompSourceHeightOffset + FgbCompSourceHeightSize == FgbCompCtrlCountOffset) ? 1 : 0);
     private const int AssertFgbCompCtrlCount = 1 / ((FgbCompCtrlCountOffset + FgbCompCtrlCountSize == FgbCompFlagsOffset) ? 1 : 0);
-    private const int AssertFgbCompFlags = 1 / ((FgbCompFlagsOffset + FgbCompFlagsSize == FgbCompReservedOffset) ? 1 : 0);
+    private const int AssertFgbCompFlags = 1 / ((FgbCompFlagsOffset + FgbCompFlagsSize == FgbCompPlanStartOffset) ? 1 : 0);
+    private const int AssertFgbCompPlanStart = 1 / ((FgbCompPlanStartOffset + FgbCompPlanStartSize == FgbCompPlanCountOffset) ? 1 : 0);
+    private const int AssertFgbCompPlanCount = 1 / ((FgbCompPlanCountOffset + FgbCompPlanCountSize == FgbCompReservedOffset) ? 1 : 0);
     private const int AssertFgbCompReserved = 1 / ((FgbCompReservedOffset + FgbCompReservedSize == FgbCompSize) ? 1 : 0);
     private const int AssertFgbContKind = 1 / ((FgbContKindOffset + FgbContKindSize == FgbContBlendOffset) ? 1 : 0);
     private const int AssertFgbContBlend = 1 / ((FgbContBlendOffset + FgbContBlendSize == FgbContFlagsOffset) ? 1 : 0);
@@ -913,6 +979,19 @@ public static class AbiLayout
     private const int AssertFgbCnstHeaderFanCount = 1 / ((FgbCnstHeaderFanCountOffset + FgbCnstHeaderFanCountSize == FgbCnstHeaderIndexCountOffset) ? 1 : 0);
     private const int AssertFgbCnstHeaderIndexCount = 1 / ((FgbCnstHeaderIndexCountOffset + FgbCnstHeaderIndexCountSize == FgbCnstHeaderMaskCountOffset) ? 1 : 0);
     private const int AssertFgbCnstHeaderMaskCount = 1 / ((FgbCnstHeaderMaskCountOffset + FgbCnstHeaderMaskCountSize == FgbCnstHeaderSize) ? 1 : 0);
+    private const int AssertFgbPlanCompIndex = 1 / ((FgbPlanCompIndexOffset + FgbPlanCompIndexSize == FgbPlanParentStepOffset) ? 1 : 0);
+    private const int AssertFgbPlanParentStep = 1 / ((FgbPlanParentStepOffset + FgbPlanParentStepSize == FgbPlanKindOffset) ? 1 : 0);
+    private const int AssertFgbPlanKind = 1 / ((FgbPlanKindOffset + FgbPlanKindSize == FgbPlanHostLocalIdOffset) ? 1 : 0);
+    private const int AssertFgbPlanHostLocalId = 1 / ((FgbPlanHostLocalIdOffset + FgbPlanHostLocalIdSize == FgbPlanListItemCountOffset) ? 1 : 0);
+    private const int AssertFgbPlanListItemCount = 1 / ((FgbPlanListItemCountOffset + FgbPlanListItemCountSize == FgbPlanFlagsOffset) ? 1 : 0);
+    private const int AssertFgbPlanFlags = 1 / ((FgbPlanFlagsOffset + FgbPlanFlagsSize == FgbPlanSize) ? 1 : 0);
+    private const int AssertFgbPatchTexRef = 1 / ((FgbPatchTexRefOffset + FgbPatchTexRefSize == FgbPatchTargetOffset) ? 1 : 0);
+    private const int AssertFgbPatchTarget = 1 / ((FgbPatchTargetOffset + FgbPatchTargetSize == FgbPatchSectionOffset) ? 1 : 0);
+    private const int AssertFgbPatchSection = 1 / ((FgbPatchSectionOffset + FgbPatchSectionSize == FgbPatchSlotOffset) ? 1 : 0);
+    private const int AssertFgbPatchSlot = 1 / ((FgbPatchSlotOffset + FgbPatchSlotSize == FgbPatchReservedOffset) ? 1 : 0);
+    private const int AssertFgbPatchReserved = 1 / ((FgbPatchReservedOffset + FgbPatchReservedSize == FgbPatchSize) ? 1 : 0);
+    private const int AssertFgbDepPkgId = 1 / ((FgbDepPkgIdOffset + FgbDepPkgIdSize == FgbDepExpectedSourceHashOffset) ? 1 : 0);
+    private const int AssertFgbDepExpectedSourceHash = 1 / ((FgbDepExpectedSourceHashOffset + FgbDepExpectedSourceHashSize == FgbDepSize) ? 1 : 0);
 
     /// <summary>
     /// 定义点交叉校验：本文件常量 vs <see cref="Abi"/> 数据表。null = 一致；
@@ -999,7 +1078,7 @@ public static class AbiLayout
         if (Abi.PropIds[13].Id != PropIdRotation) return "PropId Rotation 与生成物不符";
         if (Abi.PropIds[14].Id != PropIdSkew) return "PropId Skew 与生成物不符";
         if (Abi.PropIds[15].Id != PropIdPixelSnap) return "PropId PixelSnap 与生成物不符";
-        if (Abi.FgbHeaderFields.Length != 11) return "Abi.FgbHeaderFields 表长与生成物不符";
+        if (Abi.FgbHeaderFields.Length != 12) return "Abi.FgbHeaderFields 表长与生成物不符";
         if (Abi.FgbHeaderFields[0].Offset != FgbHeaderMagicOffset || Abi.FgbHeaderFields[0].Size != FgbHeaderMagicSize) return "FgbHeaderMagic 偏移/大小与生成物不符";
         if (Abi.FgbHeaderFields[1].Offset != FgbHeaderFormatVersionOffset || Abi.FgbHeaderFields[1].Size != FgbHeaderFormatVersionSize) return "FgbHeaderFormatVersion 偏移/大小与生成物不符";
         if (Abi.FgbHeaderFields[2].Offset != FgbHeaderFlagsOffset || Abi.FgbHeaderFields[2].Size != FgbHeaderFlagsSize) return "FgbHeaderFlags 偏移/大小与生成物不符";
@@ -1010,7 +1089,8 @@ public static class AbiLayout
         if (Abi.FgbHeaderFields[7].Offset != FgbHeaderScaleLevelOffset || Abi.FgbHeaderFields[7].Size != FgbHeaderScaleLevelSize) return "FgbHeaderScaleLevel 偏移/大小与生成物不符";
         if (Abi.FgbHeaderFields[8].Offset != FgbHeaderBranchIdOffset || Abi.FgbHeaderFields[8].Size != FgbHeaderBranchIdSize) return "FgbHeaderBranchId 偏移/大小与生成物不符";
         if (Abi.FgbHeaderFields[9].Offset != FgbHeaderSectionCountOffset || Abi.FgbHeaderFields[9].Size != FgbHeaderSectionCountSize) return "FgbHeaderSectionCount 偏移/大小与生成物不符";
-        if (Abi.FgbHeaderFields[10].Offset != FgbHeaderReserved1Offset || Abi.FgbHeaderFields[10].Size != FgbHeaderReserved1Size) return "FgbHeaderReserved1 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[10].Offset != FgbHeaderPkgIdOffset || Abi.FgbHeaderFields[10].Size != FgbHeaderPkgIdSize) return "FgbHeaderPkgId 偏移/大小与生成物不符";
+        if (Abi.FgbHeaderFields[11].Offset != FgbHeaderReserved1Offset || Abi.FgbHeaderFields[11].Size != FgbHeaderReserved1Size) return "FgbHeaderReserved1 偏移/大小与生成物不符";
         if (Abi.FgbSectionDirFields.Length != 4) return "Abi.FgbSectionDirFields 表长与生成物不符";
         if (Abi.FgbSectionDirFields[0].Offset != FgbDirFourccOffset || Abi.FgbSectionDirFields[0].Size != FgbDirFourccSize) return "FgbDirFourcc 偏移/大小与生成物不符";
         if (Abi.FgbSectionDirFields[1].Offset != FgbDirReservedOffset || Abi.FgbSectionDirFields[1].Size != FgbDirReservedSize) return "FgbDirReserved 偏移/大小与生成物不符";
@@ -1063,9 +1143,9 @@ public static class AbiLayout
         if (Abi.NodeColumns[18].ElementSize != NodeColContentRefSize || Abi.NodeColumns[18].Rebase != NodeColContentRefRebase) return "NODE 列 ContentRef 与生成物不符";
         if (Abi.NodeColumns[19].ElementSize != NodeColStateRefSize || Abi.NodeColumns[19].Rebase != NodeColStateRefRebase) return "NODE 列 StateRef 与生成物不符";
         if (Abi.NodeColumns[20].ElementSize != NodeColResolvedRefSize || Abi.NodeColumns[20].Rebase != NodeColResolvedRefRebase) return "NODE 列 ResolvedRef 与生成物不符";
-        if (Abi.FgbRecords.Length != 9) return "Abi.FgbRecords 表长与生成物不符";
+        if (Abi.FgbRecords.Length != 12) return "Abi.FgbRecords 表长与生成物不符";
         if (Abi.FgbRecords[0].Size != FgbCompSize) return "记录 Comp 定长与生成物不符";
-        if (Abi.FgbRecords[0].Fields.Length != 25) return "Abi.FgbRecords[0].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[0].Fields.Length != 27) return "Abi.FgbRecords[0].Fields 表长与生成物不符";
         if (Abi.FgbRecords[0].Fields[0].Offset != FgbCompNameStrOffset || Abi.FgbRecords[0].Fields[0].Size != FgbCompNameStrSize) return "FgbCompNameStr 偏移/大小与生成物不符";
         if (Abi.FgbRecords[0].Fields[1].Offset != FgbCompNameHashOffset || Abi.FgbRecords[0].Fields[1].Size != FgbCompNameHashSize) return "FgbCompNameHash 偏移/大小与生成物不符";
         if (Abi.FgbRecords[0].Fields[2].Offset != FgbCompNodeStartOffset || Abi.FgbRecords[0].Fields[2].Size != FgbCompNodeStartSize) return "FgbCompNodeStart 偏移/大小与生成物不符";
@@ -1090,7 +1170,9 @@ public static class AbiLayout
         if (Abi.FgbRecords[0].Fields[21].Offset != FgbCompSourceHeightOffset || Abi.FgbRecords[0].Fields[21].Size != FgbCompSourceHeightSize) return "FgbCompSourceHeight 偏移/大小与生成物不符";
         if (Abi.FgbRecords[0].Fields[22].Offset != FgbCompCtrlCountOffset || Abi.FgbRecords[0].Fields[22].Size != FgbCompCtrlCountSize) return "FgbCompCtrlCount 偏移/大小与生成物不符";
         if (Abi.FgbRecords[0].Fields[23].Offset != FgbCompFlagsOffset || Abi.FgbRecords[0].Fields[23].Size != FgbCompFlagsSize) return "FgbCompFlags 偏移/大小与生成物不符";
-        if (Abi.FgbRecords[0].Fields[24].Offset != FgbCompReservedOffset || Abi.FgbRecords[0].Fields[24].Size != FgbCompReservedSize) return "FgbCompReserved 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[24].Offset != FgbCompPlanStartOffset || Abi.FgbRecords[0].Fields[24].Size != FgbCompPlanStartSize) return "FgbCompPlanStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[25].Offset != FgbCompPlanCountOffset || Abi.FgbRecords[0].Fields[25].Size != FgbCompPlanCountSize) return "FgbCompPlanCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[26].Offset != FgbCompReservedOffset || Abi.FgbRecords[0].Fields[26].Size != FgbCompReservedSize) return "FgbCompReserved 偏移/大小与生成物不符";
         if (Abi.FgbRecords[1].Size != FgbContSize) return "记录 Cont 定长与生成物不符";
         if (Abi.FgbRecords[1].Fields.Length != 22) return "Abi.FgbRecords[1].Fields 表长与生成物不符";
         if (Abi.FgbRecords[1].Fields[0].Offset != FgbContKindOffset || Abi.FgbRecords[1].Fields[0].Size != FgbContKindSize) return "FgbContKind 偏移/大小与生成物不符";
@@ -1168,6 +1250,25 @@ public static class AbiLayout
         if (Abi.FgbRecords[8].Fields[1].Offset != FgbCnstHeaderFanCountOffset || Abi.FgbRecords[8].Fields[1].Size != FgbCnstHeaderFanCountSize) return "FgbCnstHeaderFanCount 偏移/大小与生成物不符";
         if (Abi.FgbRecords[8].Fields[2].Offset != FgbCnstHeaderIndexCountOffset || Abi.FgbRecords[8].Fields[2].Size != FgbCnstHeaderIndexCountSize) return "FgbCnstHeaderIndexCount 偏移/大小与生成物不符";
         if (Abi.FgbRecords[8].Fields[3].Offset != FgbCnstHeaderMaskCountOffset || Abi.FgbRecords[8].Fields[3].Size != FgbCnstHeaderMaskCountSize) return "FgbCnstHeaderMaskCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[9].Size != FgbPlanSize) return "记录 Plan 定长与生成物不符";
+        if (Abi.FgbRecords[9].Fields.Length != 6) return "Abi.FgbRecords[9].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[9].Fields[0].Offset != FgbPlanCompIndexOffset || Abi.FgbRecords[9].Fields[0].Size != FgbPlanCompIndexSize) return "FgbPlanCompIndex 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[9].Fields[1].Offset != FgbPlanParentStepOffset || Abi.FgbRecords[9].Fields[1].Size != FgbPlanParentStepSize) return "FgbPlanParentStep 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[9].Fields[2].Offset != FgbPlanKindOffset || Abi.FgbRecords[9].Fields[2].Size != FgbPlanKindSize) return "FgbPlanKind 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[9].Fields[3].Offset != FgbPlanHostLocalIdOffset || Abi.FgbRecords[9].Fields[3].Size != FgbPlanHostLocalIdSize) return "FgbPlanHostLocalId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[9].Fields[4].Offset != FgbPlanListItemCountOffset || Abi.FgbRecords[9].Fields[4].Size != FgbPlanListItemCountSize) return "FgbPlanListItemCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[9].Fields[5].Offset != FgbPlanFlagsOffset || Abi.FgbRecords[9].Fields[5].Size != FgbPlanFlagsSize) return "FgbPlanFlags 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[10].Size != FgbPatchSize) return "记录 Patch 定长与生成物不符";
+        if (Abi.FgbRecords[10].Fields.Length != 5) return "Abi.FgbRecords[10].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[10].Fields[0].Offset != FgbPatchTexRefOffset || Abi.FgbRecords[10].Fields[0].Size != FgbPatchTexRefSize) return "FgbPatchTexRef 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[10].Fields[1].Offset != FgbPatchTargetOffset || Abi.FgbRecords[10].Fields[1].Size != FgbPatchTargetSize) return "FgbPatchTarget 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[10].Fields[2].Offset != FgbPatchSectionOffset || Abi.FgbRecords[10].Fields[2].Size != FgbPatchSectionSize) return "FgbPatchSection 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[10].Fields[3].Offset != FgbPatchSlotOffset || Abi.FgbRecords[10].Fields[3].Size != FgbPatchSlotSize) return "FgbPatchSlot 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[10].Fields[4].Offset != FgbPatchReservedOffset || Abi.FgbRecords[10].Fields[4].Size != FgbPatchReservedSize) return "FgbPatchReserved 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[11].Size != FgbDepSize) return "记录 Dep 定长与生成物不符";
+        if (Abi.FgbRecords[11].Fields.Length != 2) return "Abi.FgbRecords[11].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[11].Fields[0].Offset != FgbDepPkgIdOffset || Abi.FgbRecords[11].Fields[0].Size != FgbDepPkgIdSize) return "FgbDepPkgId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[11].Fields[1].Offset != FgbDepExpectedSourceHashOffset || Abi.FgbRecords[11].Fields[1].Size != FgbDepExpectedSourceHashSize) return "FgbDepExpectedSourceHash 偏移/大小与生成物不符";
         return null;
     }
 }

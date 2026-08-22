@@ -66,6 +66,12 @@ public static class FgmCodes
     /// 单包编译面给不出——头内该字段恒零、DEPS 不写，装载期身份门归 M1-22 的多包编译面。Info。</summary>
     public const string CrossPackageDeferred = "FGM304";
 
+    /// <summary>组件引用成环（A 里放 B、B 里放 A）：PLAN 的后序展开不可能终止。Error。</summary>
+    public const string PlanCycle = "FGM305";
+
+    /// <summary>PLAN 后序展开越水位（嵌套引用过深或过宽）——产物会大到没有意义。Error。</summary>
+    public const string PlanTooLarge = "FGM306";
+
     /// <summary>编译期 P5 未在受控轮次内收敛（编译器内部错误：布局有未静态断开的反向依赖）。Error。</summary>
     public const string ShapeNotConverged = "FGM901";
 

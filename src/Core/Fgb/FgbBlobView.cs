@@ -50,6 +50,8 @@ public readonly struct FgbBlobView
     public uint Flags => ReadU32(AbiLayout.FgbHeaderFlagsOffset);
     public ulong SelfHash => ReadU64(AbiLayout.FgbHeaderSelfHashOffset);
     public ulong SourceHash => ReadU64(AbiLayout.FgbHeaderSourceHashOffset);
+    /// <summary>包 id 字符串的 FNV-1a 64（装载门 5 的对照物；v2 起有效，v1 blob 已被门 1 拒）。</summary>
+    public ulong PkgId => ReadU64(AbiLayout.FgbHeaderPkgIdOffset);
     public ulong CombinedRefHash => ReadU64(AbiLayout.FgbHeaderCombinedRefHashOffset);
     public ushort ScaleLevel => ReadU16(AbiLayout.FgbHeaderScaleLevelOffset);
     public ushort BranchId => ReadU16(AbiLayout.FgbHeaderBranchIdOffset);
@@ -131,6 +133,12 @@ public readonly struct FgbBlobView
             sections[i] = (fourcc, len);
         }
 
+        // 门 1/2 到此为止全绿：判决表逐门记一行（拒载路径由 Reject 记，成功路径在这里记）。
+        report.Note(FgbGate.Magic, FgbGateClass.Structural, false, false,
+            $"magic/formatVersion/flags 精确匹配（v{version}）");
+        report.Note(FgbGate.SectionBounds, FgbGateClass.Structural, false, false,
+            $"{sectionCount} 段全部在界且 {Abi.FgbSectionAlignment}B 对齐");
+
         if (verifySelfHash)
         {
             ulong stored = MemoryMarshal.Read<ulong>(s.Slice(AbiLayout.FgbHeaderSelfHashOffset));
@@ -138,9 +146,15 @@ public readonly struct FgbBlobView
             if (stored != computed)
                 return Reject(ref report, FgbGate.SelfHash,
                     $"selfHash 0x{stored:X16} != 重算 0x{computed:X16}（传输损坏或事后改写）");
+            report.Note(FgbGate.SelfHash, FgbGateClass.Structural, false, false, "全 blob FNV-1a 相符");
+        }
+        else
+        {
+            report.Note(FgbGate.SelfHash, FgbGateClass.Structural, false, true, "调用方声明发布包可信任");
         }
 
         report.Sections = sections;
+        report.Outcome = FgbLoadOutcome.Loaded;
         view = new FgbBlobView(blob, (int)sectionCount);
         return true;
     }
@@ -182,6 +196,25 @@ public readonly struct FgbBlobView
             return true;
         }
         payload = default;
+        return false;
+    }
+
+    /// <summary>
+    /// 按 fourcc 取段的**字节区间**（目录序首个命中）。span 在 <c>ref struct</c> 之外存不住，
+    /// 而装载器要把十四个段的位置记在对象上——故给出 (offset,length) 形态。
+    /// </summary>
+    public bool TryGetSectionRange(uint fourcc, out int offset, out int length)
+    {
+        for (int i = 0; i < _sectionCount; i++)
+        {
+            (uint fc, ulong off, ulong len) = DirEntry(i);
+            if (fc != fourcc) continue;
+            offset = (int)off;
+            length = (int)len;
+            return true;
+        }
+        offset = 0;
+        length = 0;
         return false;
     }
 
@@ -230,8 +263,8 @@ public readonly struct FgbBlobView
 
     private static bool Reject(ref FgbLoadReport report, FgbGate gate, string detail)
     {
-        report.RejectedBy = gate;
-        report.Detail = detail;
+        // 容器门一律结构性：版本不匹配/损坏/越界只源于部署错配，必须响亮拒载而不是降级。
+        report.Note(gate, FgbGateClass.Structural, true, false, detail);
         return false;
     }
 

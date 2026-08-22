@@ -365,12 +365,15 @@ public static partial class Program
         catch (FgmCompileException e) { Console.WriteLine("     " + e.Message); Check("freeze 读回: blob 打开", false); return; }
         if (!TryOpenBlob(r, out FgbBlobView v)) { Check("freeze 读回: blob 打开", false); return; }
 
+        // 规范段序（M1-22 补三段后的形态）：身份与索引先行 → 模板本体 → 求值图 →
+        // 渲染冻结 → **装载期补丁最后**（PTCH 是唯一会被写的段，排在末尾读起来才对得上它的角色）。
         uint[] want =
         {
-            AbiLayout.FgbSectionStrt, AbiLayout.FgbSectionTref, AbiLayout.FgbSectionComp,
-            AbiLayout.FgbSectionNode, AbiLayout.FgbSectionCont, AbiLayout.FgbSectionLocl,
+            AbiLayout.FgbSectionStrt, AbiLayout.FgbSectionTref, AbiLayout.FgbSectionDeps,
+            AbiLayout.FgbSectionComp, AbiLayout.FgbSectionNode, AbiLayout.FgbSectionPlan,
+            AbiLayout.FgbSectionCont, AbiLayout.FgbSectionLocl,
             AbiLayout.FgbSectionCnst, AbiLayout.FgbSectionQuad, AbiLayout.FgbSectionSegs,
-            AbiLayout.FgbSectionLeaf, AbiLayout.FgbSectionClip,
+            AbiLayout.FgbSectionLeaf, AbiLayout.FgbSectionClip, AbiLayout.FgbSectionPtch,
         };
         bool order = v.SectionCount == want.Length;
         for (int i = 0; order && i < want.Length; i++) order &= v.FourccAt(i) == want[i];
@@ -378,12 +381,14 @@ public static partial class Program
         ulong sourceHash = 0ul;
         if (FuiPackageOf(dir, "PullToRefresh") is { } pkg) sourceHash = pkg.SourceHash;
 
+        ulong pkgIdHash = FuiPackageOf(dir, "PullToRefresh") is { } pk ? FnvHash.Hash64(pk.Id ?? "") : 0ul;
         bool head = v.FormatVersion == Abi.FgbFormatVersion
             && v.SelfHash == FgbBlobView.ComputeSelfHash(r.Blob.Span)
             && v.SourceHash == sourceHash && sourceHash != 0ul
+            && v.PkgId == pkgIdHash && pkgIdHash != 0ul
             && v.ScaleLevel == 2 && v.BranchId == 3
             && v.CombinedRefHash == 0ul;
-        Check("freeze 读回: 打开即验完 + 规范段序十一段 + 四维身份进头（scale/branch/sourceHash）",
+        Check("freeze 读回: 打开即验完 + 规范段序十四段 + 四维身份进头（pkgId/scale/branch/sourceHash）",
             order && head);
     }
 
@@ -417,9 +422,10 @@ public static partial class Program
         {
             if (!r.TryGetComponent(sc.Item.Id, out FrozenComponent? fc)) { ok = false; continue; }
             uint first = sc.Locals.HandleOf(0).Index;
-            // 相对化在 M1 是**数值恒等**（编译世界里组件根恒在槽 1）——这条断言把那个前提
-            // 钉住：根一旦不在槽 1，恒等假设失效、golden 随之变，改动就不会悄悄发生。
-            ok &= first == 1u;
+            // 组件根是世界树根的**孩子**（M1-22 起），故模板区间从槽 2 起——相对化在真语料上
+            // 不再是数值恒等（M1-20b 记在案的那条存活变异自此有门管得住）。
+            // 这条断言把前提钉住：根一旦挪位，golden 随之变，改动不会悄悄发生。
+            ok &= first == 2u;
             for (int col = 0; col < Abi.NodeColumns.Length; col++)
             {
                 int w = Abi.NodeColumns[col].ElementSize;
@@ -430,10 +436,15 @@ public static partial class Program
 
                 if (Abi.NodeColumns[col].Rebase)
                 {
+                    bool linkCol = col == AbiLayout.NodeColParent || col == AbiLayout.NodeColNextSib
+                        || col == AbiLayout.NodeColPrevSib;
                     for (int i = 0; i < fc.NodeCount; i++)
                     {
                         uint abs = BitConverter.ToUInt32(tree, i * 4);
                         uint rel = BitConverter.ToUInt32(got.Slice(i * 4, 4).ToArray(), 0);
+                        // 模板根的父/前后兄是**编译宿主**的链位（它挂在世界树根下），不是模板的一部分：
+                        // 冻结成哨兵 0，实例化时由挂载重新写。其余行按 rel = abs − first + 1。
+                        if (i == 0 && linkCol) { ok &= rel == 0u; continue; }
                         ok &= abs == 0u ? rel == 0u : rel == abs - first + 1u;
                     }
                 }
@@ -860,8 +871,8 @@ public static partial class Program
         // 段字节之和 + 头 + 目录 + 对齐填充 = blob；账本不许漏段
         int sum = 0;
         for (int i = 0; i < v.SectionCount; i++) sum += v.SectionAt(i).Length;
-        ok &= lines == 11 && sum > 0 && sum < r.Blob.Length;
-        ok &= r.MemoryPlan.Contains("blob=" + r.Blob.Length + "B sections=11");
+        ok &= lines == 14 && sum > 0 && sum < r.Blob.Length;
+        ok &= r.MemoryPlan.Contains("blob=" + r.Blob.Length + "B sections=14");
         Check("freeze 内存计划: 逐段账 == blob 实际段字节（" + lines + " 段）+ 头行自洽", ok);
     }
 
@@ -878,6 +889,9 @@ public static partial class Program
         "SEGS" => AbiLayout.FgbSectionSegs,
         "LEAF" => AbiLayout.FgbSectionLeaf,
         "CLIP" => AbiLayout.FgbSectionClip,
+        "PLAN" => AbiLayout.FgbSectionPlan,
+        "PTCH" => AbiLayout.FgbSectionPtch,
+        "DEPS" => AbiLayout.FgbSectionDeps,
         _ => 0u,
     };
 
@@ -1019,11 +1033,24 @@ public static partial class Program
             bool said = r.Diagnostics.Has(FgmCodes.CrossPackageDeferred);
             ok &= TryOpenBlob(r, out FgbBlobView v)
                 && v.CombinedRefHash == 0ul
-                && !v.TryGetSection(AbiLayout.FgbSectionDeps, out _)
+                && v.TryGetSection(AbiLayout.FgbSectionDeps, out ReadOnlySpan<byte> depSec)
+                && depSec.Length == deps * AbiLayout.FgbDepSize
                 && said == (deps > 0);
+            // DEPS 的**条目**写得出（id 在描述符里），**期望哈希**写不出（要链上各包的 sourceHash）。
+            // 逐条必须是零 = 「未知」——装载门 4 据此记 unverified 而不判不符；
+            // 写成非零就是编造对照物，那比不写更糟。
+            if (ok)
+            {
+                v.TryGetSection(AbiLayout.FgbSectionDeps, out ReadOnlySpan<byte> dsec);
+                for (int i = 0; i < deps; i++)
+                    ok &= FgbRecordIo.ReadU64(dsec.Slice(i * AbiLayout.FgbDepSize, AbiLayout.FgbDepSize),
+                              AbiLayout.FgbDepExpectedSourceHashOffset) == 0ul
+                        && FgbRecordIo.ReadU64(dsec.Slice(i * AbiLayout.FgbDepSize, AbiLayout.FgbDepSize),
+                              AbiLayout.FgbDepPkgIdOffset) != 0ul;
+            }
             if (deps > 0) withDeps++; else without++;
         }
-        Check("freeze 跨包: DEPS 不写 + combinedRefHash 恒零 + FGM304 与依赖存在与否同真值"
-            + "（有依赖 " + withDeps + " 包 / 无依赖 " + without + " 包）", ok);
+        Check("freeze 跨包: DEPS 逐条 {pkgId, expectedSourceHash = 0（未知）} + combinedRefHash 恒零"
+            + " + FGM304 与依赖存在与否同真值（有依赖 " + withDeps + " 包 / 无依赖 " + without + " 包）", ok);
     }
 }

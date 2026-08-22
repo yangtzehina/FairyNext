@@ -43,7 +43,7 @@ public sealed class FgbWriter
     /// 拼装整 blob：64B 头 + 目录 + 16B 对齐段区，最后补钉 selfHash（字段按零参与散列，
     /// 算法唯一实现点在 <see cref="FgbBlobView.ComputeSelfHash"/>——写读两侧不许各抄一份）。
     /// </summary>
-    public byte[] Finish(ulong sourceHash, ulong combinedRefHash, ushort scaleLevel, ushort branchId)
+    public byte[] Finish(ulong pkgId, ulong sourceHash, ulong combinedRefHash, ushort scaleLevel, ushort branchId)
     {
         // 布局账先行：头 | 目录 | 逐段（各自对齐上去）。
         long dirEnd = Abi.FgbHeaderSize + (long)_sections.Count * Abi.FgbSectionDirEntrySize;
@@ -67,6 +67,7 @@ public sealed class FgbWriter
         BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(AbiLayout.FgbHeaderFormatVersionOffset), (uint)Abi.FgbFormatVersion);
         BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(AbiLayout.FgbHeaderFlagsOffset),
             1u << AbiLayout.FgbFlagLittleEndianShift);
+        BinaryPrimitives.WriteUInt64LittleEndian(s.Slice(AbiLayout.FgbHeaderPkgIdOffset), pkgId);
         BinaryPrimitives.WriteUInt64LittleEndian(s.Slice(AbiLayout.FgbHeaderSourceHashOffset), sourceHash);
         BinaryPrimitives.WriteUInt64LittleEndian(s.Slice(AbiLayout.FgbHeaderCombinedRefHashOffset), combinedRefHash);
         BinaryPrimitives.WriteUInt16LittleEndian(s.Slice(AbiLayout.FgbHeaderScaleLevelOffset), scaleLevel);

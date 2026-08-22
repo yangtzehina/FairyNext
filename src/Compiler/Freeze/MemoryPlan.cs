@@ -47,6 +47,7 @@ internal static class MemoryPlan
               .Append(" clips=").Append(N(c.ClipCount))
               .Append(" ops=").Append(N(c.OpCount))
               .Append(" slots=").Append(N(c.ResolvedSlots))
+              .Append(" plan=").Append(N(c.PlanCount))
               .Append(" instanceBytes=").Append(N(c.InstanceBytes))
               .Append(" pool=").Append(N(pool)).Append('B')
               .Append('\n');
@@ -99,6 +100,9 @@ internal static class MemoryPlan
             case "TREF": return " records=" + N(bytes / AbiLayout.FgbTexRefSize) + "×" + N(AbiLayout.FgbTexRefSize) + "B";
             case "STRT": return " strings=" + N(f.Strings.Count) + " pool=" + N(f.Strings.PoolBytes) + "B";
             case "CNST": return " ops=" + N(f.TotalOps);
+            case "PLAN": return " steps=" + N(f.TotalPlanSteps) + "×" + N(AbiLayout.FgbPlanSize) + "B";
+            case "PTCH": return " records=" + N(f.TotalPatches) + "×" + N(AbiLayout.FgbPatchSize) + "B";
+            case "DEPS": return " records=" + N(f.TotalDeps) + "×" + N(AbiLayout.FgbDepSize) + "B";
             default: return string.Empty;
         }
     }

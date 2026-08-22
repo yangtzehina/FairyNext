@@ -21,7 +21,7 @@ public static class AbiMock
     /// <summary>"FGB1" little-endian；头首 4 字节，不符即拒载</summary>
     public const uint FgbMagic = 0x31424746u;
     /// <summary>精确匹配，不匹配 = 结构性拒载（不降级）</summary>
-    public const int FgbFormatVersion = 1;
+    public const int FgbFormatVersion = 2;
     /// <summary>段 16B 对齐，定长记录 Cast 直读</summary>
     public const int FgbSectionAlignment = 16;
     /// <summary>bytes/实例；实例缓冲 stride</summary>

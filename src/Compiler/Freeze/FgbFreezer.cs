@@ -47,6 +47,13 @@ internal sealed class FgbFreezer
     private readonly List<byte> _segs = new List<byte>();
     private readonly List<byte> _leaves = new List<byte>();
     private readonly List<byte> _locals = new List<byte>();
+    private readonly List<byte> _plan = new List<byte>();
+    private readonly List<byte> _patches = new List<byte>();
+    private readonly List<byte> _deps = new List<byte>();
+    private readonly Dictionary<uint, int> _texRefOf = new Dictionary<uint, int>();
+    private readonly HashSet<uint> _patchedCont = new HashSet<uint>();
+    private readonly HashSet<uint> _runtimeOwnedTex = new HashSet<uint>();
+    private readonly Dictionary<string, int> _compOfItemId = new Dictionary<string, int>(StringComparer.Ordinal);
 
     private int _totalNodes;
 
@@ -72,6 +79,7 @@ internal sealed class FgbFreezer
         public int OpStart, OpCount;
         public int FanStart, IdxStart, IdxCount;
         public int LocalStart, LocalCount;
+        public int PlanStart, PlanCount;
         public int ResolvedSlots;
         public uint InstanceBytes;
         public uint NameStr, NameHash;
@@ -105,17 +113,35 @@ internal sealed class FgbFreezer
             FgbRecordIo.U32(rec, AbiLayout.FgbTexRefItemStrOffset, _strings.Add(kv.Key));
             FgbRecordIo.U16(rec, AbiLayout.FgbTexRefKindOffset, 0);
             FgbRecordIo.U16(rec, AbiLayout.FgbTexRefTexIdOffset, (ushort)kv.Value.Value);
-            _texRefs.Add(rec);
+            // 分配序即记录序（canonical 对全零重复记录才去重，纹理符号各不相同故一一对应）。
+            _texRefOf[kv.Value.Value] = _texRefs.Add(rec);
         }
 
+        // DEPS：**条目**写得出（依赖 id 就在描述符里），**期望哈希**写不出（那要链上各包的
+        // sourceHash，单包编译面没有）。于是逐条写 {pkgId, expectedSourceHash = 0}，
+        // 0 = 「未知」——装载门 4 据此记 unverified 计数而不判不符。头内 combinedRefHash 同理恒零。
+        for (int i = 0; i < pkg.Dependencies.Length; i++)
+        {
+            var rec = new byte[AbiLayout.FgbDepSize];
+            FgbRecordIo.U64(rec, AbiLayout.FgbDepPkgIdOffset, FnvHash.Hash64(pkg.Dependencies[i].Id ?? string.Empty));
+            FgbRecordIo.U64(rec, AbiLayout.FgbDepExpectedSourceHashOffset, 0ul);
+            _deps.AddRange(rec);
+        }
         if (pkg.Dependencies.Length > 0)
             _diag.Add(FgmCodes.CrossPackageDeferred, FgmSeverity.Info, "",
-                "包有 " + pkg.Dependencies.Length + " 条跨包依赖：combinedRefHash 需要链上各包的 sourceHash，"
-                + "单包编译面给不出——头内该字段恒零、DEPS 段不写，装载期身份门归 M1-22 的多包编译面");
+                "包有 " + pkg.Dependencies.Length + " 条跨包依赖：combinedRefHash 与 DEPS 的 expectedSourceHash "
+                + "需要链上各包的 sourceHash，单包编译面给不出——两者写零（= 未知），"
+                + "装载门 4 记 unverified 计数；多包编译面归后续里程碑");
 
         for (int i = 0; i < _shaped.Components.Count; i++)
+        {
+            _compOfItemId[_shaped.Components[i].Item.Id] = _comps.Count;
             FreezeComponent(_shaped.Components[i]);
+        }
 
+        if (_diag.HasErrors) throw new FgmCompileException(_diag);
+
+        BuildPlans(pkg);
         if (_diag.HasErrors) throw new FgmCompileException(_diag);
 
         // 不变量 8 的编译后置扫描（按构造不可能红；不变量是关于**产物**的断言，必须自带一次检查）。
@@ -199,7 +225,15 @@ internal sealed class FgbFreezer
             uint cid = sc.Table.ContentRef(h);
             if (cid == 0 || cid >= (uint)sc.Content.Count || mapped[cid]) continue;
             mapped[cid] = true;
-            c.ContentMap[cid] = (uint)_content.Add(ContentRecordOf(sc, h, sc.Content.At(cid)));
+            byte[] rec = ContentRecordOf(sc, h, sc.Content.At(cid));
+            uint canon = (uint)_content.Add(rec);
+            c.ContentMap[cid] = canon;
+            // PTCH：CONT 里的 texId 是**包内**编号，装载期要换成宿主的运行期编号。
+            // 去重后同一条 canonical 记录只需要一条补丁（登记两次就补两次，回填是幂等的但
+            // 账不对：LoadReport 的 patch 数是「O(patch 数)」那句话的观测值，不许注水）。
+            uint localTex = FgbRecordIo.ReadU32(rec, AbiLayout.FgbContTexIdOffset);
+            if (localTex != 0u && _patchedCont.Add(canon))
+                AddPatch(localTex, canon, Abi.FgbPatchSectionCont, 0);
         }
 
         // ④ 段区间记账。
@@ -308,6 +342,12 @@ internal sealed class FgbFreezer
 
     private void AppendSegment(in SegmentDesc seg)
     {
+        // 段键里的四个纹理编号同样是包内编号——逐个在用槽出一条补丁（目标 = 本记录的段内下标）。
+        uint target = (uint)(_segs.Count / AbiLayout.FgbSegSize);
+        Span<uint> keyTex = stackalloc uint[4] { seg.Tex0.Value, seg.Tex1.Value, seg.Tex2.Value, seg.Tex3.Value };
+        for (int slot = 0; slot < seg.TexCount && slot < Abi.SegmentMaxTextures; slot++)
+            if (keyTex[slot] != 0u) AddPatch(keyTex[slot], target, Abi.FgbPatchSectionSegs, (ushort)slot);
+
         byte[] rec = new byte[AbiLayout.FgbSegSize];
         Span<byte> s = rec;
         FgbRecordIo.U32(s, AbiLayout.FgbSegTex0Offset, seg.Tex0.Value);
@@ -388,6 +428,147 @@ internal sealed class FgbFreezer
         c.IdxCount = g.FanOpIndices.Length;
     }
 
+    /// <summary>
+    /// 登记一条装载期回填。
+    /// **只有包内图集条目才回填**：段键里还会出现**运行期自有**的纹理编号（字形图集就是一个，
+    /// 见 <c>TextSystem.AtlasTexture</c>）——它们不来自本包、在任何宿主上都由运行期自己发号，
+    /// 回填反而会把它改坏。这类编号不产条目，但**有声**（每个不同的编号记一条 Info）。
+    /// </summary>
+    private void AddPatch(uint localTexId, uint target, ushort section, ushort slot)
+    {
+        if (!_texRefOf.TryGetValue(localTexId, out int texRef))
+        {
+            if (_runtimeOwnedTex.Add(localTexId))
+                _diag.Add(FgmCodes.ResourceUnresolved, FgmSeverity.Info, "",
+                    "纹理编号 " + localTexId + " 不在本包图集表里（运行期自有纹理，如字形图集）"
+                    + "——不产装载期回填条目");
+            return;
+        }
+        var rec = new byte[AbiLayout.FgbPatchSize];
+        Span<byte> s = rec;
+        FgbRecordIo.U32(s, AbiLayout.FgbPatchTexRefOffset, (uint)texRef);
+        FgbRecordIo.U32(s, AbiLayout.FgbPatchTargetOffset, target);
+        FgbRecordIo.U16(s, AbiLayout.FgbPatchSectionOffset, section);
+        FgbRecordIo.U16(s, AbiLayout.FgbPatchSlotOffset, slot);
+        _patches.AddRange(rec);
+    }
+
+    // ── PLAN 段（后序扁平实例化计划，机制 5 / 不变量 9）──────────────────────
+
+    /// <summary>一条待写的步（parentStep 在宿主步落位后回填）。</summary>
+    private struct PlanTmp
+    {
+        public int CompIndex;
+        public uint ParentStep;
+        public ushort Kind;
+        public ushort HostLocalId;
+    }
+
+    /// <summary>PLAN 步的总量水位（展开是每个顶层组件一份完整后序，乘性增长要有上界）。</summary>
+    private const int MaxPlanSteps = 1 << 16;
+
+    /// <summary>
+    /// 逐组件展开后序计划。展开的是**引用关系**：子件的 <c>src</c> 指到同包的组件条目时，
+    /// 它在实例化期就是一个嵌套块（走各自模板 slab）。跨包引用不展开（有声 FGM302）——
+    /// 它需要 DEPS 解析出的目标包，属于多包装载面。
+    /// </summary>
+    private void BuildPlans(FuiPackage pkg)
+    {
+        var nested = new List<(ushort Local, int Comp)>[_comps.Count];
+        for (int i = 0; i < _comps.Count; i++) nested[i] = NestedRefsOf(pkg, _comps[i]);
+
+        var steps = new List<PlanTmp>();
+        var onStack = new bool[_comps.Count];
+        for (int i = 0; i < _comps.Count; i++)
+        {
+            steps.Clear();
+            int start = _plan.Count / AbiLayout.FgbPlanSize;
+            if (!Expand(i, nested, onStack, steps, start)) return;
+            for (int k = 0; k < steps.Count; k++)
+            {
+                var rec = new byte[AbiLayout.FgbPlanSize];
+                Span<byte> s = rec;
+                FgbRecordIo.U32(s, AbiLayout.FgbPlanCompIndexOffset, (uint)steps[k].CompIndex);
+                FgbRecordIo.U32(s, AbiLayout.FgbPlanParentStepOffset, steps[k].ParentStep);
+                FgbRecordIo.U16(s, AbiLayout.FgbPlanKindOffset, steps[k].Kind);
+                FgbRecordIo.U16(s, AbiLayout.FgbPlanHostLocalIdOffset, steps[k].HostLocalId);
+                FgbRecordIo.U16(s, AbiLayout.FgbPlanListItemCountOffset, 0);
+                _plan.AddRange(rec);
+            }
+            _comps[i].PlanStart = start;
+            _comps[i].PlanCount = steps.Count;
+            if (steps.Count > 1) _comps[i].Flags |= 4;
+            if (_plan.Count / AbiLayout.FgbPlanSize > MaxPlanSteps)
+            {
+                _diag.Add(FgmCodes.PlanTooLarge, FgmSeverity.Error, _comps[i].Sc.Item.Name ?? _comps[i].Sc.Item.Id,
+                    "后序展开越 " + MaxPlanSteps + " 步水位——嵌套引用过深或过宽");
+                return;
+            }
+        }
+    }
+
+    /// <summary>后序展开一个组件；返回 false = 已出错（环）。<paramref name="offset"/> = 本计划在段内的起点。</summary>
+    private bool Expand(int comp, List<(ushort Local, int Comp)>[] nested, bool[] onStack,
+        List<PlanTmp> steps, int offset)
+    {
+        if (onStack[comp])
+        {
+            _diag.Add(FgmCodes.PlanCycle, FgmSeverity.Error, _comps[comp].Sc.Item.Name ?? _comps[comp].Sc.Item.Id,
+                "组件引用成环：后序展开不可能终止（编辑器不该产出这种包）");
+            return false;
+        }
+        onStack[comp] = true;
+        var kids = new List<(int Root, ushort Local)>();
+        List<(ushort Local, int Comp)> refs = nested[comp];
+        for (int i = 0; i < refs.Count; i++)
+        {
+            if (!Expand(refs[i].Comp, nested, onStack, steps, offset)) { onStack[comp] = false; return false; }
+            kids.Add((steps.Count - 1, refs[i].Local));
+        }
+        int self = steps.Count;
+        steps.Add(new PlanTmp
+        {
+            CompIndex = comp,
+            ParentStep = Abi.FgbPlanNoParent,
+            Kind = Abi.FgbPlanKindRoot,
+            HostLocalId = 0,
+        });
+        // 子件的根步在这里从「顶层」改判为「嵌套」并认宿主——**后序 ⇒ 宿主步号必大于子步号**。
+        for (int i = 0; i < kids.Count; i++)
+        {
+            PlanTmp t = steps[kids[i].Root];
+            t.Kind = Abi.FgbPlanKindNested;
+            t.HostLocalId = kids[i].Local;
+            t.ParentStep = (uint)(offset + self);
+            steps[kids[i].Root] = t;
+        }
+        onStack[comp] = false;
+        return true;
+    }
+
+    /// <summary>本组件里指向同包组件条目的子件（localId 升序）。</summary>
+    private List<(ushort Local, int Comp)> NestedRefsOf(FuiPackage pkg, Frozen c)
+    {
+        var list = new List<(ushort, int)>();
+        FuiChild[] children = c.Sc.Source.Children;
+        for (int i = 0; i < children.Length; i++)
+        {
+            FuiChild ch = children[i];
+            if (ch.Src == null) continue;
+            if (ch.PkgId != null)
+            {
+                _diag.Add(FgmCodes.ResourceUnresolved, FgmSeverity.Info, c.Sc.Item.Name ?? c.Sc.Item.Id,
+                    "子件 '" + (ch.Id ?? "?") + "' 引用跨包资源 " + ch.PkgId + "/" + ch.Src
+                    + "：PLAN 不展开（需要 DEPS 解析出的目标包，归多包装载面）");
+                continue;
+            }
+            if (!pkg.TryGetItemById(ch.Src, out FuiItem? item) || item.Type != FuiItemType.Component) continue;
+            if (!_compOfItemId.TryGetValue(item.Id, out int comp)) continue;   // 该组件定形失败，已有 Error 诊断
+            list.Add(((ushort)(i + 1), comp));
+        }
+        return list;
+    }
+
     // ── NODE 段（包级扁平 + 相对化 + contentRef 重映射）────────────────────
 
     private byte[] BuildNodeSection()
@@ -405,6 +586,12 @@ internal sealed class FgbFreezer
                 if (!Abi.NodeColumns[col].Rebase) continue;
                 Relativize(ColumnSlice(s, col, c), first);
             }
+            // 模板根不属于任何兄弟环：它的父与前后兄链位由**实例化时挂到哪儿**决定，
+            // 不是模板的一部分（编译世界里它挂在那棵世界树的根下，那是编译宿主的事）。
+            // 冻结成哨兵 0，装载期的拓扑门据此要求「局部 0 的三列全 0」。
+            ZeroFirstRow(ColumnSlice(s, AbiLayout.NodeColParent, c));
+            ZeroFirstRow(ColumnSlice(s, AbiLayout.NodeColNextSib, c));
+            ZeroFirstRow(ColumnSlice(s, AbiLayout.NodeColPrevSib, c));
             RemapContentRef(ColumnSlice(s, AbiLayout.NodeColContentRef, c), c.ContentMap);
             c.ResolvedSlots = CountNonZero(ColumnSlice(s, AbiLayout.NodeColResolvedRef, c));
         }
@@ -447,6 +634,13 @@ internal sealed class FgbFreezer
             v[i] = v[i] < (uint)map.Length ? map[v[i]] : 0u;
     }
 
+    /// <summary>把一根 u32 列的首行写成哨兵 0（模板根的链位归实例化）。</summary>
+    private static void ZeroFirstRow(Span<byte> column)
+    {
+        Span<uint> v = MemoryMarshal.Cast<byte, uint>(column);
+        if (v.Length > 0) v[0] = 0u;
+    }
+
     private static int CountNonZero(Span<byte> column)
     {
         Span<uint> v = MemoryMarshal.Cast<byte, uint>(column);
@@ -462,8 +656,10 @@ internal sealed class FgbFreezer
         var w = new FgbWriter();
         Add(w, "STRT", AbiLayout.FgbSectionStrt, BuildStrt());
         Add(w, "TREF", AbiLayout.FgbSectionTref, _texRefs.ToPayload());
+        Add(w, "DEPS", AbiLayout.FgbSectionDeps, _deps.ToArray());
         Add(w, "COMP", AbiLayout.FgbSectionComp, BuildComp());
         Add(w, "NODE", AbiLayout.FgbSectionNode, node);
+        Add(w, "PLAN", AbiLayout.FgbSectionPlan, _plan.ToArray());
         Add(w, "CONT", AbiLayout.FgbSectionCont, _content.ToPayload());
         Add(w, "LOCL", AbiLayout.FgbSectionLocl, _locals.ToArray());
         Add(w, "CNST", AbiLayout.FgbSectionCnst, BuildCnst());
@@ -471,8 +667,10 @@ internal sealed class FgbFreezer
         Add(w, "SEGS", AbiLayout.FgbSectionSegs, _segs.ToArray());
         Add(w, "LEAF", AbiLayout.FgbSectionLeaf, _leaves.ToArray());
         Add(w, "CLIP", AbiLayout.FgbSectionClip, MemoryMarshal.AsBytes(_clips.ToArray().AsSpan()).ToArray());
+        Add(w, "PTCH", AbiLayout.FgbSectionPtch, _patches.ToArray());
         // combinedRefHash 恒零：见上方 FGM304——链上各包的 sourceHash 不在单包编译面内。
-        return w.Finish(pkg.SourceHash, 0ul, (ushort)_shaped.ScaleLevel, (ushort)_shaped.BranchId);
+        return w.Finish(FnvHash.Hash64(pkg.Id ?? string.Empty), pkg.SourceHash, 0ul,
+            (ushort)_shaped.ScaleLevel, (ushort)_shaped.BranchId);
     }
 
     private void Add(FgbWriter w, string name, uint fourcc, byte[] payload)
@@ -527,6 +725,8 @@ internal sealed class FgbFreezer
             FgbRecordIo.U32(s, AbiLayout.FgbCompCnstIdxCountOffset, (uint)c.IdxCount);
             FgbRecordIo.U32(s, AbiLayout.FgbCompLocalStartOffset, (uint)c.LocalStart);
             FgbRecordIo.U32(s, AbiLayout.FgbCompLocalCountOffset, (uint)c.LocalCount);
+            FgbRecordIo.U32(s, AbiLayout.FgbCompPlanStartOffset, (uint)c.PlanStart);
+            FgbRecordIo.U32(s, AbiLayout.FgbCompPlanCountOffset, (uint)c.PlanCount);
             FgbRecordIo.U32(s, AbiLayout.FgbCompInstanceBytesOffset, c.InstanceBytes);
             FgbRecordIo.F32(s, AbiLayout.FgbCompSourceWidthOffset, c.Sc.Source.SourceWidth);
             FgbRecordIo.F32(s, AbiLayout.FgbCompSourceHeightOffset, c.Sc.Source.SourceHeight);
@@ -566,6 +766,9 @@ internal sealed class FgbFreezer
     internal int TotalQuads => _quads.Count;
     internal int TotalClips => _clips.Count;
     internal int TotalOps => _ops.Count;
+    internal int TotalPlanSteps => _plan.Count / AbiLayout.FgbPlanSize;
+    internal int TotalPatches => _patches.Count / AbiLayout.FgbPatchSize;
+    internal int TotalDeps => _deps.Count / AbiLayout.FgbDepSize;
     internal IReadOnlyList<Frozen> Comps => _comps;
 
 }

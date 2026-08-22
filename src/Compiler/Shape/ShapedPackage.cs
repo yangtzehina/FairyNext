@@ -96,8 +96,11 @@ public sealed class ShapedComponent
     /// <summary>内容池（叶 spec；M1-20b Extract 的内容源）。</summary>
     public ContentTable Content { get; }
 
-    /// <summary>组件根（= <see cref="NodeTable.Root"/>，尺寸 = 源尺寸）。</summary>
-    public NodeHandle Root => Table.Root;
+    /// <summary>
+    /// 组件根（= 局部 0，尺寸 = 源尺寸）。它是**世界树根的孩子**而不是世界树根：
+    /// 实例在真宿主里永远是一棵子树，编译世界照此办理（见 TreeBuilder ②）。
+    /// </summary>
+    public NodeHandle Root => Locals.HandleOf(0);
 
     /// <summary>localId 映射。</summary>
     public LocalIdMap Locals { get; }

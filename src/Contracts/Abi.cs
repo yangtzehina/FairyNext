@@ -216,7 +216,8 @@ public static class Abi
 {
     // ---- FGB 容器（设计书 §4.8；头/段目录/NODE 列的记录布局见文件下方数据表，M1-19）----
     public const uint FgbMagic = 0x31424746;       // "FGB1" little-endian
-    public const int FgbFormatVersion = 1;         // 布局变更必 bump（结构性不符 → 拒载）
+    public const int FgbFormatVersion = 2;         // 布局变更必 bump（结构性不符 → 拒载）
+                                                   // v2（M1-22）：PLAN/PTCH/DEPS 三段进驻 + COMP 增 planStart/planCount（96B→104B）
     public const int FgbSectionAlignment = 16;     // 段 16B 对齐，定长记录 MemoryMarshal.Cast 直读
     public const int FgbHeaderSize = 64;           // FgbHeader 定长（16B 对齐；布局 = FgbHeaderFields）
     public const int FgbSectionDirEntrySize = 24;  // SectionDir 条目定长（布局 = FgbSectionDirFields）
@@ -414,7 +415,8 @@ public static class Abi
         new AbiField("ScaleLevel", "scaleLevel", 40, 2, AbiFieldKind.UInt16, "内容缩放档（四维身份 3/4）"),
         new AbiField("BranchId", "branchId", 42, 2, AbiFieldKind.UInt16, "branch 变体（四维身份 4/4）"),
         new AbiField("SectionCount", "sectionCount", 44, 4, AbiFieldKind.UInt32, "段目录条目数（目录紧随头部）"),
-        new AbiField("Reserved1", "_reserved1", 48, 16, AbiFieldKind.Pad, "保留，写零（append-only：新字段从此处切）"),
+        new AbiField("PkgId", "pkgId", 48, 8, AbiFieldKind.UInt64, "包 id 字符串的 FNV-1a 64（M1-22 从 v1 保留区切；装载门 5 的对照物——**以 id 定身份，不以名字**）"),
+        new AbiField("Reserved1", "_reserved1", 56, 8, AbiFieldKind.Pad, "保留，写零（append-only：新字段从此处切）"),
     };
 
     /// <summary>SectionDir 条目字段表（24B；目录数组紧随 64B 头，条目 0 起）。</summary>
@@ -475,7 +477,7 @@ public static class Abi
         new AbiNodeColumn("FirstChild", 4, AbiFieldKind.UInt32, true, "首子下标"),
         new AbiNodeColumn("NextSib", 4, AbiFieldKind.UInt32, true, "后兄下标（环形链）"),
         new AbiNodeColumn("PrevSib", 4, AbiFieldKind.UInt32, true, "前兄下标（环形链）"),
-        new AbiNodeColumn("OwnerInst", 4, AbiFieldKind.UInt32, true, "所属组件实例节点下标"),
+        new AbiNodeColumn("OwnerInst", 4, AbiFieldKind.UInt32, true, "所属组件实例节点下标（**实例身份列**：模板里恒 0，实例化按块回填为块首下标）"),
         new AbiNodeColumn("LocalId", 2, AbiFieldKind.UInt16, false, "模板内寻址 id（localId u16）"),
         new AbiNodeColumn("TypeId", 2, AbiFieldKind.UInt16, false, "节点类型 id"),
         new AbiNodeColumn("PosX", 4, AbiFieldKind.Float32, false, "authored 位置 x（节点原点在父空间）"),
@@ -504,6 +506,21 @@ public static class Abi
 
     /// <summary>实例块头字节数（PLAN 实例化的定长部分；控制器状态与编译期 scratch 从其后切）。</summary>
     public const int FgbInstanceHeaderBytes = 16;
+
+    /// <summary>PLAN 顶层步的 <c>parentStep</c> 哨兵（"本步没有宿主"）。</summary>
+    public const uint FgbPlanNoParent = 0xFFFFFFFFu;
+
+    /// <summary>PLAN 步种类：顶层块（节点段 + 实例块一次分配）。</summary>
+    public const ushort FgbPlanKindRoot = 0;
+
+    /// <summary>PLAN 步种类：嵌套子组件（走各自模板 slab + 补丁引用挂到宿主 localId 上）。</summary>
+    public const ushort FgbPlanKindNested = 1;
+
+    /// <summary>PTCH 目标段：CONT 记录的 <c>texId</c> 字段。</summary>
+    public const ushort FgbPatchSectionCont = 0;
+
+    /// <summary>PTCH 目标段：SEGS 记录的 <c>tex0..tex3</c> 之一（由 <c>slot</c> 选）。</summary>
+    public const ushort FgbPatchSectionSegs = 1;
 
     /// <summary>
     /// COMP 记录：一个组件模板在包内的全部段区间。所有 Start/Count 都是**段内记录下标**
@@ -534,8 +551,10 @@ public static class Abi
         new AbiField("SourceWidth", "sourceWidth", 80, 4, AbiFieldKind.Float32, "组件源宽"),
         new AbiField("SourceHeight", "sourceHeight", 84, 4, AbiFieldKind.Float32, "组件源高"),
         new AbiField("CtrlCount", "ctrlCount", 88, 2, AbiFieldKind.UInt16, "控制器数（M1 恒 0——BIND 归 M2 状态层）"),
-        new AbiField("Flags", "flags", 90, 2, AbiFieldKind.UInt16, "位域：bit0 有约束图 | bit1 有文本叶"),
-        new AbiField("Reserved", "_reserved", 92, 4, AbiFieldKind.Pad, "保留，写零（append-only：新字段从此切）"),
+        new AbiField("Flags", "flags", 90, 2, AbiFieldKind.UInt16, "位域：bit0 有约束图 | bit1 有文本叶 | bit2 有嵌套子组件步"),
+        new AbiField("PlanStart", "planStart", 92, 4, AbiFieldKind.UInt32, "PLAN 段内步起点（M1-22：从 v1 的保留区切）"),
+        new AbiField("PlanCount", "planCount", 96, 4, AbiFieldKind.UInt32, "步数（≥1；末步 = 本组件的顶层步，后序性质）"),
+        new AbiField("Reserved", "_reserved", 100, 4, AbiFieldKind.Pad, "保留，写零（append-only：新字段从此切）"),
     };
 
     /// <summary>
@@ -650,13 +669,54 @@ public static class Abi
     };
 
     /// <summary>
+    /// PLAN 记录：一条**后序扁平**实例化步骤（机制 5）。后序性质（不变量 9）= 任一步引用的
+    /// 全部子步下标 &lt; 自身，于是**任意前缀执行合法**——异步切片正确性的全部依据。
+    /// 展开是「每个顶层组件一份自己的完整后序」：同一子组件被多处引用就出现多条步，
+    /// 各自带自己的 <c>hostLocalId</c>，运行期不需要第二次查表。
+    /// </summary>
+    public static readonly AbiField[] FgbPlanFields =
+    {
+        new AbiField("CompIndex", "compIndex", 0, 4, AbiFieldKind.UInt32, "COMP 段内组件下标（本包内）；跨包模板归 DEPS/TREF，M1 不产"),
+        new AbiField("ParentStep", "parentStep", 4, 4, AbiFieldKind.UInt32, "宿主步下标（顶层步 = FgbPlanNoParent）；后序 ⇒ parentStep > 自身"),
+        new AbiField("Kind", "kind", 8, 2, AbiFieldKind.UInt16, "FgbPlanKindRoot = 顶层块 | FgbPlanKindNested = 嵌套子组件"),
+        new AbiField("HostLocalId", "hostLocalId", 10, 2, AbiFieldKind.UInt16, "在宿主组件内的挂载点 localId（嵌套步有效，顶层步写零）"),
+        new AbiField("ListItemCount", "listItemCount", 12, 2, AbiFieldKind.UInt16, "GList 首屏 item 数（M1 恒 0——虚拟列表归 M2-07）"),
+        new AbiField("Flags", "flags", 14, 2, AbiFieldKind.UInt16, "保留，写零"),
+    };
+
+    /// <summary>
+    /// PTCH 记录：一处**装载期回填**的纹理身份（机制 3）。跨包 UV 不烘死是同一条纪律的极端形态；
+    /// M1 的形态是「包内分配的 texId 在装载期换成宿主的运行期纹理 id」——
+    /// 段键与 CONT 里的纹理编号因此永远来自**当前这次装载**，而不是编译那台机器的编号。
+    /// </summary>
+    public static readonly AbiField[] FgbPatchFields =
+    {
+        new AbiField("TexRef", "texRef", 0, 4, AbiFieldKind.UInt32, "TREF 段内下标（要绑定的纹理符号）"),
+        new AbiField("Target", "target", 4, 4, AbiFieldKind.UInt32, "目标记录在其段内的下标"),
+        new AbiField("Section", "section", 8, 2, AbiFieldKind.UInt16, "FgbPatchSectionCont = CONT.texId | FgbPatchSectionSegs = SEGS.tex[slot]"),
+        new AbiField("Slot", "slot", 10, 2, AbiFieldKind.UInt16, "SEGS 的纹理槽 0..3（CONT 目标恒 0）"),
+        new AbiField("Reserved", "_reserved", 12, 4, AbiFieldKind.Pad, "保留，写零"),
+    };
+
+    /// <summary>
+    /// DEPS 记录：一条依赖包引用（装载门 4 的逐项对照物）。
+    /// <c>expectedSourceHash == 0</c> = **单包编译面给不出**（FGM304）——门 4 记 unverified 计数，
+    /// 「未知」不等于「不符」，不据此降级。
+    /// </summary>
+    public static readonly AbiField[] FgbDepFields =
+    {
+        new AbiField("PkgId", "pkgId", 0, 8, AbiFieldKind.UInt64, "依赖包 id 字符串的 FNV-1a 64"),
+        new AbiField("ExpectedSourceHash", "expectedSourceHash", 8, 8, AbiFieldKind.UInt64, "期望的被引用包 sourceHash（0 = 未知，见上）"),
+    };
+
+    /// <summary>
     /// FGB 定长记录清单（M1-20b）。生成物按本表出 <c>Fgb{Name}Size</c> 与
     /// <c>Fgb{Name}{Field}Offset/Size</c> 常量 + 编译期首尾相接断言 + Verify 交叉校验。
     /// **append-only**：记录只在表尾追加，字段只从各自保留区切。
     /// </summary>
     public static readonly AbiRecord[] FgbRecords =
     {
-        new AbiRecord("Comp", 96, FgbCompFields, "COMP 记录（组件模板的全段区间）"),
+        new AbiRecord("Comp", 104, FgbCompFields, "COMP 记录（组件模板的全段区间）"),
         new AbiRecord("Cont", 80, FgbContFields, "CONT 记录（内容条目 = contentRef 的目标）"),
         new AbiRecord("Local", 16, FgbLocalFields, "LOCL 记录（localId ⇄ 编辑器 id）"),
         new AbiRecord("Leaf", 40, FgbLeafFields, "LEAF 记录（叶在冻结流里的落位）"),
@@ -665,5 +725,9 @@ public static class Abi
         new AbiRecord("StrtHeader", 16, FgbStrtHeaderFields, "STRT 段头"),
         new AbiRecord("StrtEntry", 8, FgbStrtEntryFields, "STRT 条目"),
         new AbiRecord("CnstHeader", 16, FgbCnstHeaderFields, "CNST 段头（四段数组总长）"),
+        // ---- M1-22 追加（append-only：只在表尾续）----
+        new AbiRecord("Plan", 16, FgbPlanFields, "PLAN 记录（后序扁平实例化步）"),
+        new AbiRecord("Patch", 16, FgbPatchFields, "PTCH 记录（装载期纹理身份回填）"),
+        new AbiRecord("Dep", 16, FgbDepFields, "DEPS 记录（依赖包引用；装载门 4）"),
     };
 }

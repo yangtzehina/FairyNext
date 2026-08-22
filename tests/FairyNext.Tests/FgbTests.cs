@@ -33,6 +33,9 @@ public static partial class Program
 
     private const uint FourccTest = 0x54534554; // "TEST"——刻意不在 Abi.FgbSectionIds（未知段素材）
 
+    /// <summary>基准 blob 的包 id 哈希（v2 头字段；装载门 5 的对照物在 M1-22 的用例里比）。</summary>
+    private const ulong FgbBasePkgId = 0x0BADC0DE0BADC0DEUL;
+
     /// <summary>已知内容小树：root(1) → p(2) → c1(3), c2(4), c3(5)；c2 带全套 authored 区分值。</summary>
     private static NodeTable FgbBuildTree(out NodeHandle[] byIndex)
     {
@@ -68,7 +71,7 @@ public static partial class Program
         w.AddSection(AbiLayout.FgbSectionNode, FgbNodeSection.Write(t, 1, 5));
         w.AddSection(FourccTest, FgbOddPayload());
         w.AddSection(AbiLayout.FgbSectionDeps, FgbU64Payload());
-        return w.Finish(0x1122334455667788UL, 0x99AABBCCDDEEFF00UL, 2, 3);
+        return w.Finish(FgbBasePkgId, 0x1122334455667788UL, 0x99AABBCCDDEEFF00UL, 2, 3);
     }
 
     private static byte[] FgbOddPayload()
@@ -251,7 +254,7 @@ public static partial class Program
         w.AddSection(FourccTest, new byte[] { 1, 2, 3 });
         w.AddSection(AbiLayout.FgbSectionLang, new byte[] { 10 });
         w.AddSection(AbiLayout.FgbSectionLang, new byte[] { 20, 21 });   // LANG 每语言一段：同 fourcc 多段合法
-        byte[] blob = w.Finish(0, 0, 0, 0);
+        byte[] blob = w.Finish(0, 0, 0, 0, 0);
 
         bool ok = FgbBlobView.TryOpen(blob, out var v, out _);
         Check("FGB: 未知 fourcc 段不碍开门且整段可达（前向兼容 = 段粒度跳过）",
@@ -260,7 +263,7 @@ public static partial class Program
             ok && v.TryGetSection(AbiLayout.FgbSectionLang, out var first) && first.Length == 1 && first[0] == 10
             && v.FourccAt(2) == AbiLayout.FgbSectionLang && v.SectionAt(2).Length == 2);
         Check("FGB: 零段 blob 合法（空包也得能开）",
-            FgbBlobView.TryOpen(new FgbWriter().Finish(0, 0, 0, 0), out _, out var r0) && r0.SectionCount == 0);
+            FgbBlobView.TryOpen(new FgbWriter().Finish(0, 0, 0, 0, 0), out _, out var r0) && r0.SectionCount == 0);
     }
 
     // ── 记录布局自洽 + fourcc 词表 ──────────────────────────────────────────

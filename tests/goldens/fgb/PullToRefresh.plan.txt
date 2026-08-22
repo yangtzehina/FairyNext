@@ -1,8 +1,10 @@
-memory-plan blob=7264B sections=11 components=4
+memory-plan blob=7520B sections=14 components=4
   section STRT 614B strings=43 pool=254B
   section TREF 16B records=1×16B
-  section COMP 384B records=4×96B
+  section DEPS 0B records=0×16B
+  section COMP 416B records=4×104B
   section NODE 2260B nodes=25 cols=21 bytesPerNode=80
+  section PLAN 64B steps=4×16B
   section CONT 960B records=12×80B
   section LOCL 400B records=25×16B
   section CNST 304B ops=15
@@ -10,10 +12,11 @@ memory-plan blob=7264B sections=11 components=4
   section SEGS 128B records=4×32B
   section LEAF 520B records=13×40B
   section CLIP 192B records=4×48B
-  component Footer nodes=4 quads=2 segs=1 leaves=2 clips=1 ops=2 slots=1 instanceBytes=16 pool=336B
-  component item nodes=6 quads=4 segs=1 leaves=4 clips=1 ops=5 slots=4 instanceBytes=16 pool=496B
-  component Header nodes=8 quads=5 segs=1 leaves=5 clips=1 ops=4 slots=3 instanceBytes=16 pool=656B
-  component Main nodes=7 quads=3 segs=1 leaves=2 clips=1 ops=4 slots=6 instanceBytes=16 pool=576B
+  section PTCH 96B records=6×16B
+  component Footer nodes=4 quads=2 segs=1 leaves=2 clips=1 ops=2 slots=1 plan=1 instanceBytes=16 pool=336B
+  component item nodes=6 quads=4 segs=1 leaves=4 clips=1 ops=5 slots=4 plan=1 instanceBytes=16 pool=496B
+  component Header nodes=8 quads=5 segs=1 leaves=5 clips=1 ops=4 slots=3 plan=1 instanceBytes=16 pool=656B
+  component Main nodes=7 quads=3 segs=1 leaves=2 clips=1 ops=4 slots=6 plan=1 instanceBytes=16 pool=576B
   pool-budget total=2064B nodes=25 nodeBytes=2000B
   canonical strings=43/63 content=12/14 texrefs=1/1
   mask observable=0/64 (BIND 未进 M1 编译面) Layout=2/63 Visual=5/32 Text=2/32 Transform=7/32
