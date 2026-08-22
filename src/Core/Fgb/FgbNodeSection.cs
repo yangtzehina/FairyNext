@@ -61,6 +61,44 @@ public static class FgbNodeSection
     }
 
     /// <summary>
+    /// 写包级 NODE payload 的段头（<c>u32 nodeCount</c> + 12B 零填充）。
+    /// 与 <see cref="WriteSlice"/> 配对：一个包的 NODE 段是**全部组件的节点拼成的一张扁平表**
+    /// （COMP 的 nodeStart/nodeCount 按元素下标切片），故 count 由包级调用方给出，
+    /// 各组件只往自己的行区间里填。
+    /// </summary>
+    public static void WriteHeader(Span<byte> payload, int totalCount)
+    {
+        if (totalCount < 0) throw new ArgumentOutOfRangeException(nameof(totalCount));
+        if (payload.Length != PayloadBytes(totalCount))
+            throw new ArgumentException("NODE payload 长度不等于 PayloadBytes(totalCount)", nameof(payload));
+        uint n = (uint)totalCount;
+        MemoryMarshal.Write(payload, ref n);
+    }
+
+    /// <summary>
+    /// 把一棵树的 [start, start+count) 槽区间写进包级 payload 的第
+    /// <paramref name="destIndex"/> 行起（逐列，列内位置 = <see cref="ColumnOffset"/> + 行 × 元素宽）。
+    /// 列序/元素宽仍全走 ABI 表——形状账只有 <see cref="ColumnOffset"/> 一份，这里不另算。
+    /// 出的是**原始真值**（拓扑列为绝对槽下标）；相对化（Rebase 位）归编译器冻结时做。
+    /// </summary>
+    public static void WriteSlice(Span<byte> payload, int totalCount, int destIndex,
+        NodeTable table, uint start, int count)
+    {
+        if (table == null) throw new ArgumentNullException(nameof(table));
+        if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        if (destIndex < 0 || destIndex + count > totalCount)
+            throw new ArgumentOutOfRangeException(nameof(destIndex), "行区间越 NODE 段总行数");
+        if (payload.Length != PayloadBytes(totalCount))
+            throw new ArgumentException("NODE payload 长度不等于 PayloadBytes(totalCount)", nameof(payload));
+        for (int c = 0; c < Abi.NodeColumns.Length; c++)
+        {
+            int w = Abi.NodeColumns[c].ElementSize;
+            int off = ColumnOffset(c, totalCount) + destIndex * w;
+            table.ExportColumn(c, start, count, payload.Slice(off, w * count));
+        }
+    }
+
+    /// <summary>
     /// 打开 NODE payload。false ⇒ 形状不符（<see cref="FgbGate.NodeSectionShape"/> 级拒绝，
     /// 取用方汇入 LoadReport）；true ⇒ 全列可达，<see cref="FgbNodeView.Column"/> 不再失败。
     /// </summary>

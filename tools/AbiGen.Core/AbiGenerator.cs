@@ -34,6 +34,7 @@ public static class AbiGenerator
     private const string FgbHeaderPrefix = "FgbHeader";
     private const string FgbDirPrefix = "FgbDir";
     private const string FgbFlagPrefix = "FgbFlag";
+    private const string FgbRecordPrefix = "Fgb";
 
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
@@ -274,6 +275,15 @@ public static class AbiGenerator
             o.Line(indent + "public const bool NodeCol" + c.Name + "Rebase = " + (c.Rebase ? "true" : "false") + ";");
         }
         o.Line();
+
+        // ---- 段内定长记录（M1-20b）：写侧与读侧共用同一批偏移常量 ----
+        foreach (var r in Abi.FgbRecords)
+        {
+            EmitCsFields(o, indent, FgbRecordPrefix + r.Name, "Fgb" + r.Name + " 字段（" + r.Size + "B）：" + r.Doc, r.Fields);
+            o.Line(indent + "/// <summary>" + Xml(r.Doc) + " —— 记录定长。</summary>");
+            o.Line(indent + "public const int " + FgbRecordPrefix + r.Name + "Size = " + Inv(r.Size) + ";");
+            o.Line();
+        }
     }
 
     /// <summary>fourcc u32 → 可读四字符（little-endian：首字符在最低字节）。</summary>
@@ -307,6 +317,8 @@ public static class AbiGenerator
                 sum.Append("NodeCol").Append(Abi.NodeColumns[i].Name).Append("Size");
             }
             o.Line(indent + "private const int AssertNodeColumnBytes = 1 / ((" + sum + " == NodeBytesPerNode) ? 1 : 0);");
+            foreach (var r in Abi.FgbRecords)
+                EmitFieldAsserts(o, indent, FgbRecordPrefix + r.Name, r.Fields, FgbRecordPrefix + r.Name + "Size");
         }
         o.Line();
     }
@@ -392,6 +404,14 @@ public static class AbiGenerator
                 o.Line(I2 + "if (Abi.NodeColumns[" + Inv(i) + "].ElementSize != NodeCol" + c.Name + "Size"
                     + " || Abi.NodeColumns[" + Inv(i) + "].Rebase != NodeCol" + c.Name + "Rebase) return \""
                     + "NODE 列 " + c.Name + " 与生成物不符\";");
+            }
+            o.Line(I2 + "if (Abi.FgbRecords.Length != " + Inv(Abi.FgbRecords.Length) + ") return \"Abi.FgbRecords 表长与生成物不符\";");
+            for (int i = 0; i < Abi.FgbRecords.Length; i++)
+            {
+                var r = Abi.FgbRecords[i];
+                o.Line(I2 + "if (Abi.FgbRecords[" + Inv(i) + "].Size != " + FgbRecordPrefix + r.Name
+                    + "Size) return \"记录 " + r.Name + " 定长与生成物不符\";");
+                EmitVerifyFields(o, I2, FgbRecordPrefix + r.Name, "Abi.FgbRecords[" + Inv(i) + "].Fields", r.Fields);
             }
         }
 

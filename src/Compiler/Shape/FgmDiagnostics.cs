@@ -62,12 +62,20 @@ public static class FgmCodes
     /// UBB 富文本 / 双值 skew …）——节点保几何，内容按有声原则不编。Info。</summary>
     public const string ContentNotInM1 = "FGM303";
 
+    /// <summary>跨包依赖存在：combinedRefHash 与 DEPS 段需要链上各包的 sourceHash，
+    /// 单包编译面给不出——头内该字段恒零、DEPS 不写，装载期身份门归 M1-22 的多包编译面。Info。</summary>
+    public const string CrossPackageDeferred = "FGM304";
+
     /// <summary>编译期 P5 未在受控轮次内收敛（编译器内部错误：布局有未静态断开的反向依赖）。Error。</summary>
     public const string ShapeNotConverged = "FGM901";
 
     /// <summary>编译期布局门红：P5 幂等 / 布局差分神谕 / 迟到槽分配非零——
     /// 「编译器 = 无头运行时」的自检失败（编译器 bug，不是资产问题）。Error。</summary>
     public const string ShapeGateRed = "FGM902";
+
+    /// <summary>冻结自检失败（节点槽区间不连续 / canonical 后置扫描红 / 段形状账不符）——
+    /// 与 FGM902 同一性质：编译器 bug，不是资产问题。Error。</summary>
+    public const string FreezeSelfCheck = "FGM903";
 }
 
 /// <summary>一条 FGM 诊断。</summary>

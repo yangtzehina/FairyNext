@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using FairyNext.Compiler.Fui;
+using FairyNext.Compiler.Freeze;
 using FairyNext.Compiler.Shape;
 using FairyNext.Core.Rendering;
 using FairyNext.Core.Text;
@@ -16,8 +17,10 @@ namespace FairyNext.Compiler;
 ///    编译期消灭 + localId 映射）→ relation → 约束编译（拒环 = FGM101，L0）→ 编译期跑
 ///    P5 + 度量（复用 TextSystem/LayoutEngine，幂等门与差分神谕全程开启，
 ///    LateSlotAllocs 恒零升门 FGM902）→ <see cref="ShapedPackage"/>（已定形的树 + 诊断）。
-///  - <see cref="Compile"/>（全量门面）：前半真跑；后半（Extract → canonical 去重 → 段冻结 →
-///    内存计划打印）随 M1-20b 进驻——**吃的是 ShapedPackage，不重新解析**。
+///  - <see cref="Freeze"/>（**后半，已可用**）：吃 <see cref="ShapedPackage"/>——**不重新解析 .fui**——
+///    对每个已定形的树跑**运行期同一个** <c>Extract</c>（离线路径自开尾剪枝）→ canonical 去重
+///    → 十一段冻结（STRT/TREF/COMP/NODE/CONT/LOCL/CNST/QUAD/SEGS/LEAF/CLIP）→ 内存计划打印。
+///  - <see cref="Compile"/>（全量门面）= <see cref="Shape"/> + <see cref="Freeze"/>。
 /// </summary>
 public static class FgbCompiler
 {
@@ -34,7 +37,8 @@ public static class FgbCompiler
         if (!FuiPackage.TryParse(fuiBytes.ToArray(), out FuiPackage? pkg, out string parseDiag) || pkg == null)
         {
             diag.Add(FgmCodes.PackageRejected, FgmSeverity.Error, "", parseDiag);
-            return new ShapedPackage(null, components, diag, null);
+            return new ShapedPackage(null, components, diag, null,
+                Array.Empty<KeyValuePair<string, TexId>>(), options.ScaleLevel, options.BranchId);
         }
 
         var ctx = new ShapeContext();
@@ -72,7 +76,10 @@ public static class FgbCompiler
         for (int i = 0; i < pkg.Items.Count; i++)
         {
             FuiItem it = pkg.Items[i];
-            if (it.Type == FuiItemType.Atlas) ctx.AtlasTex.Add(it.Id, new TexId(nextTex++));
+            if (it.Type != FuiItemType.Atlas) continue;
+            var tex = new TexId(nextTex++);
+            ctx.AtlasTex.Add(it.Id, tex);
+            ctx.AtlasOrder.Add(new KeyValuePair<string, TexId>(it.Id, tex));
         }
 
         // ── 逐组件定形（包条目序；每组件一个独立无头世界）──────────────────────
@@ -90,12 +97,12 @@ public static class FgbCompiler
             if (shaped != null) components.Add(shaped);
         }
 
-        return new ShapedPackage(pkg, components, diag, ctx.Metrics);
+        return new ShapedPackage(pkg, components, diag, ctx.Metrics, ctx.AtlasOrder,
+            options.ScaleLevel, options.BranchId);
     }
 
     /// <summary>
-    /// 全量编译门面。前半（<see cref="Shape"/>）真跑；前半失败抛 <see cref="FgmCompileException"/>
-    /// （诊断随身）；冻结后半随 M1-20b 进驻。
+    /// 全量编译门面。任一半失败抛 <see cref="FgmCompileException"/>（诊断随身）。
     /// </summary>
     public static CompileResult Compile(ReadOnlyMemory<byte> fuiBytes, in CompileOptions options)
     {
@@ -104,10 +111,12 @@ public static class FgbCompiler
         return Freeze(shaped);
     }
 
-    /// <summary>后半（M1-20b 进驻点）：已定形的树 → Extract → canonical 去重 → 段冻结 → 内存计划。</summary>
-    public static CompileResult Freeze(ShapedPackage shaped)
-        => throw new NotImplementedException(
-            "M1-20b：Extract → canonical 去重 → FgbWriter 段冻结 → 内存计划打印（前半产物见 ShapedPackage，勿重新解析）");
+    /// <summary>
+    /// 后半（M1-20b）：已定形的树 → 编译期 Extract → canonical 去重 → 段冻结 → 内存计划。
+    /// **唯一入口，且不重新解析 .fui**——.fui 前端在本半根本不在场，产物只来自
+    /// <paramref name="shaped"/> 里那些真无头世界（承诺 8）。
+    /// </summary>
+    public static CompileResult Freeze(ShapedPackage shaped) => FgbFreezer.Run(shaped);
 }
 
 /// <summary>编译失败（Error 级 FGM 诊断存在）。诊断集随身，消息 = 逐行诊断文本。</summary>
@@ -142,14 +151,84 @@ public readonly struct CompileOptions
     }
 }
 
+/// <summary>
+/// 一次冻结的全部产物。<see cref="Blob"/> 是发布物；其余三项是**验证物**——
+/// 两份确定性文本进 code review 的 diff，逐组件的流快照进等价性金样。
+/// </summary>
 public sealed class CompileResult
 {
+    /// <summary>FGB blob（十一段，规范段序；同输入逐字节相同）。</summary>
     public ReadOnlyMemory<byte> Blob { get; }
-    public string MemoryPlan { get; }     // 人读账单，同时是测试断言锚（v1.2）
-    public string ReactiveGraph { get; }  // 绑定表/拓扑序/掩码的规范文本 golden（v1.2）
 
-    public CompileResult(ReadOnlyMemory<byte> blob, string memoryPlan, string reactiveGraph)
+    /// <summary>内存计划（v1.2 机制 11）：段字节 / 实例块字节 / 池预算 / 掩码占用率，人读且可断言。</summary>
+    public string MemoryPlan { get; }
+
+    /// <summary>编译产物 golden 文本（v1.2）：ABI 行 + CNST 拓扑序 + 订阅掩码（BIND 随 M2）。</summary>
+    public string ReactiveGraph { get; }
+
+    /// <summary>全部 FGM 诊断（Shape 与 Freeze 两半共用一本）。</summary>
+    public CompileDiagnostics Diagnostics { get; }
+
+    /// <summary>逐组件的冻结账（含编译期 Extract 的流快照——等价性金样的路径 A）。</summary>
+    public IReadOnlyList<FrozenComponent> Components { get; }
+
+    public CompileResult(ReadOnlyMemory<byte> blob, string memoryPlan, string reactiveGraph,
+        CompileDiagnostics diagnostics, IReadOnlyList<FrozenComponent> components)
     {
-        Blob = blob; MemoryPlan = memoryPlan; ReactiveGraph = reactiveGraph;
+        Blob = blob;
+        MemoryPlan = memoryPlan;
+        ReactiveGraph = reactiveGraph;
+        Diagnostics = diagnostics;
+        Components = components;
+    }
+
+    /// <summary>按包内条目 id 取冻结账。</summary>
+    public bool TryGetComponent(string itemId, out FrozenComponent component)
+    {
+        for (int i = 0; i < Components.Count; i++)
+        {
+            if (Components[i].ItemId != itemId) continue;
+            component = Components[i];
+            return true;
+        }
+        component = null!;
+        return false;
+    }
+}
+
+/// <summary>
+/// 一个组件的冻结账。<see cref="Stream"/> 是**编译期 Extract 的产物快照**——
+/// 等价性金样（不变量 18）拿它的 <c>CanonicalStream</c> 字节与运行时管线跑出的流比对，
+/// 那同时是降级阶梯「组件级降回运行时 Extract」的正确性凭据：两条路径是同一段代码。
+/// </summary>
+public sealed class FrozenComponent
+{
+    public string ItemId { get; }
+    public string Name { get; }
+    /// <summary>编译期 Extract 的流快照。</summary>
+    public StreamSnapshot Stream { get; }
+    /// <summary>编译期 Extract 的收据（叶/实例/段/剪枝计数）。</summary>
+    public ExtractReport Extract { get; }
+    public int NodeStart { get; }
+    public int NodeCount { get; }
+    public int QuadStart { get; }
+    public int QuadCount { get; }
+    public int LeafStart { get; }
+    public int LeafCount { get; }
+    public int OpStart { get; }
+    public int OpCount { get; }
+    /// <summary>实例块字节（内存计划是承诺不是估计）。</summary>
+    public uint InstanceBytes { get; }
+
+    internal FrozenComponent(string itemId, string name, StreamSnapshot stream, ExtractReport extract,
+        int nodeStart, int nodeCount, int quadStart, int quadCount, int leafStart, int leafCount,
+        int opStart, int opCount, uint instanceBytes)
+    {
+        ItemId = itemId; Name = name; Stream = stream; Extract = extract;
+        NodeStart = nodeStart; NodeCount = nodeCount;
+        QuadStart = quadStart; QuadCount = quadCount;
+        LeafStart = leafStart; LeafCount = leafCount;
+        OpStart = opStart; OpCount = opCount;
+        InstanceBytes = instanceBytes;
     }
 }

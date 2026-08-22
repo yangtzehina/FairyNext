@@ -1,0 +1,24 @@
+memory-plan blob=8992B sections=11 components=3
+  section STRT 325B strings=24 pool=117B
+  section TREF 16B records=1×16B
+  section COMP 288B records=3×96B
+  section NODE 1932B nodes=23 cols=21 bytesPerNode=80
+  section CONT 1120B records=14×80B
+  section LOCL 368B records=23×16B
+  section CNST 216B ops=8
+  section QUAD 3600B records=45×80B
+  section SEGS 96B records=3×32B
+  section LEAF 520B records=13×40B
+  section CLIP 144B records=3×48B
+  component mailItem nodes=9 quads=22 segs=1 leaves=6 clips=1 ops=0 slots=0 instanceBytes=16 pool=736B
+  component Button1 nodes=5 quads=4 segs=1 leaves=4 clips=1 ops=8 slots=4 instanceBytes=16 pool=416B
+  component Main nodes=9 quads=19 segs=1 leaves=3 clips=1 ops=0 slots=1 instanceBytes=16 pool=736B
+  pool-budget total=1888B nodes=23 nodeBytes=1840B
+  canonical strings=24/54 content=14/14 texrefs=1/1
+  mask observable=0/64 (BIND 未进 M1 编译面) Layout=2/63 Visual=5/32 Text=2/32 Transform=7/32
+abi   QuadInstance 80B rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 extra@64
+abi   NodeRecord 80B cols=21
+topo  mailItem  (无关系)
+topo  Button1  #0 n1.XSize=FollowDelta(<root>.Size) → #1 n1.YSize=FollowDelta(<root>.Size) → #2 n2.XSize=FollowDelta(<root>.Size) → #3 n2.YSize=FollowDelta(<root>.Size) → #4 n3.XSize=FollowDelta(<root>.Size) → #5 n3.YSize=FollowDelta(<root>.Size) → #6 n4.XSize=FollowDelta(<root>.Size) → #7 n4.YSize=FollowDelta(<root>.Size)
+bind  Button1  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  Main  (无关系)

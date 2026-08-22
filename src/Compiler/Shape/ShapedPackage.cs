@@ -123,15 +123,31 @@ public sealed class ShapedPackage
     private readonly Dictionary<string, int> _byItemId;
 
     internal ShapedPackage(FuiPackage? package, List<ShapedComponent> components,
-        CompileDiagnostics diagnostics, GlyphMetricsTable? fonts)
+        CompileDiagnostics diagnostics, GlyphMetricsTable? fonts,
+        IReadOnlyList<KeyValuePair<string, TexId>> textures, int scaleLevel, int branchId)
     {
         Package = package;
         _components = components;
         Diagnostics = diagnostics;
         Fonts = fonts;
+        Textures = textures;
+        ScaleLevel = scaleLevel;
+        BranchId = branchId;
         _byItemId = new Dictionary<string, int>(components.Count);
         for (int i = 0; i < components.Count; i++) _byItemId[components[i].Item.Id] = i;
     }
+
+    /// <summary>
+    /// 图集条目 id → 段键纹理 id（**分配序即冻结序**：M1-20b 的 TREF 段与 QUAD 段键同源，
+    /// 中间没有第二次编号）。跨包引用不在此表——它们归装载期 PTCH/DEPS（M1-22）。
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, TexId>> Textures { get; }
+
+    /// <summary>内容缩放档（四维身份 3/4，进 FGB 头）。</summary>
+    public int ScaleLevel { get; }
+
+    /// <summary>branch 变体（四维身份 4/4，进 FGB 头）。</summary>
+    public int BranchId { get; }
 
     /// <summary>包描述符（FGM001 拒收时为 null）。</summary>
     public FuiPackage? Package { get; }

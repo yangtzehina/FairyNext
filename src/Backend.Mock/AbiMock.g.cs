@@ -56,6 +56,8 @@ public static class AbiMock
     public const int FgbSectionDirEntrySize = 24;
     /// <summary>NODE 段列元素宽之和 = NodeTable 真值列 80B/节点</summary>
     public const int NodeBytesPerNode = 80;
+    /// <summary>实例块头定长；控制器状态与编译期 scratch 从其后切</summary>
+    public const int FgbInstanceHeaderBytes = 16;
 
     // ---- QuadInstance 字段（80B，16B 对齐） ----
     /// <summary>rect @0 +16：xy = 槽本地 min 角，zw = size</summary>

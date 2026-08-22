@@ -64,6 +64,13 @@ public static partial class Program
                              //（**约束环拒绝 FGM101（L0）上线**）→ 编译期 P5 + 度量（复用
                              // TextSystem/LayoutEngine，LateSlotAllocs 恒零升门 FGM902），
                              // 用例在 CompilerShapeTests.cs（partial）
+        CompilerFreezeSuite(); // M1-20b FgbCompiler 后半：已定形的树 → 编译期 Extract → canonical
+                             // 去重 → 十一段冻结 → 内存计划打印。三道门上线：**编译产物 golden（L1，
+                             // 四包 FGB 逐字节 + 人读账单入 tests/goldens/fgb）**、**等价性金样
+                             //（不变量 18：编译期 Extract == 运行时管线 Extract 的 CanonicalStream
+                             // 逐字节，六包 25 组件）**、**FGB 读回 sanity（NODE/COMP/CNST/LOCL/
+                             // STRT/LEAF 逐段与原树对账）**；另有 canonical 后置扫描（不变量 8）、
+                             // 内存计划断言锚、冻结前置门 FGM903，用例在 CompilerFreezeTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

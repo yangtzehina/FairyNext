@@ -23,6 +23,12 @@ internal sealed class ShapeContext
     /// <summary>图集条目 id → 段键纹理 id（本包内分配，M1-20b 冻结 TREF 时同源）。</summary>
     public readonly Dictionary<string, TexId> AtlasTex = new Dictionary<string, TexId>(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 同一批登记的**分配序**列表。字典的枚举序在 .NET 里不是契约（无删除时碰巧是插入序，
+    /// 但那是实现细节），而 TREF 段的记录序进 blob 字节 ⇒ 进 golden ——顺序必须由我们自己拿住。
+    /// </summary>
+    public readonly List<KeyValuePair<string, TexId>> AtlasOrder = new List<KeyValuePair<string, TexId>>();
+
     public bool HasFonts => Metrics != null;
 }
 

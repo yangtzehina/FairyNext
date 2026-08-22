@@ -1,0 +1,37 @@
+memory-plan blob=12000B sections=11 components=9
+  section STRT 1002B strings=72 pool=410B
+  section TREF 16B records=1×16B
+  section COMP 864B records=9×96B
+  section NODE 4192B nodes=52 cols=21 bytesPerNode=80
+  section CONT 1040B records=13×80B
+  section LOCL 832B records=52×16B
+  section CNST 392B ops=11
+  section QUAD 2080B records=26×80B
+  section SEGS 192B records=6×32B
+  section LEAF 600B records=15×40B
+  section CLIP 432B records=9×48B
+  component Page nodes=10 quads=3 segs=1 leaves=3 clips=1 ops=0 slots=2 instanceBytes=16 pool=816B
+  component Button1 nodes=5 quads=4 segs=1 leaves=4 clips=1 ops=8 slots=4 instanceBytes=16 pool=416B
+  component Pages nodes=3 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 instanceBytes=16 pool=256B
+  component Book nodes=8 quads=4 segs=1 leaves=4 clips=1 ops=0 slots=0 instanceBytes=16 pool=656B
+  component FrontCover nodes=9 quads=5 segs=1 leaves=2 clips=1 ops=0 slots=1 instanceBytes=16 pool=736B
+  component BackCover nodes=6 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 instanceBytes=16 pool=496B
+  component Slider2 nodes=4 quads=9 segs=1 leaves=1 clips=1 ops=3 slots=2 instanceBytes=16 pool=336B
+  component Slider2_grip nodes=2 quads=1 segs=1 leaves=1 clips=1 ops=0 slots=0 instanceBytes=16 pool=176B
+  component Main nodes=5 quads=0 segs=0 leaves=0 clips=1 ops=0 slots=0 instanceBytes=16 pool=416B
+  pool-budget total=4304B nodes=52 nodeBytes=4160B
+  canonical strings=72/119 content=13/16 texrefs=1/1
+  mask observable=0/64 (BIND 未进 M1 编译面) Layout=2/63 Visual=5/32 Text=2/32 Transform=7/32
+abi   QuadInstance 80B rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 extra@64
+abi   NodeRecord 80B cols=21
+topo  Page  (无关系)
+topo  Button1  #0 n1.XSize=FollowDelta(<root>.Size) → #1 n1.YSize=FollowDelta(<root>.Size) → #2 n2.XSize=FollowDelta(<root>.Size) → #3 n2.YSize=FollowDelta(<root>.Size) → #4 n3.XSize=FollowDelta(<root>.Size) → #5 n3.YSize=FollowDelta(<root>.Size) → #6 n4.XSize=FollowDelta(<root>.Size) → #7 n4.YSize=FollowDelta(<root>.Size)
+bind  Button1  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  Pages  (无关系)
+topo  Book  (无关系)
+topo  FrontCover  (无关系)
+topo  BackCover  (无关系)
+topo  Slider2  #0 n1.XSize=FollowDelta(<root>.Size) → #1 n1.YSize=FollowDelta(<root>.Size) → #2 n3.XMax=FollowDelta(n2.Max)
+bind  Slider2  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  Slider2_grip  (无关系)
+topo  Main  (无关系)

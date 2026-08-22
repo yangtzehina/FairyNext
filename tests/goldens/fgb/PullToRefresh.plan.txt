@@ -1,0 +1,29 @@
+memory-plan blob=7264B sections=11 components=4
+  section STRT 614B strings=43 pool=254B
+  section TREF 16B records=1×16B
+  section COMP 384B records=4×96B
+  section NODE 2260B nodes=25 cols=21 bytesPerNode=80
+  section CONT 960B records=12×80B
+  section LOCL 400B records=25×16B
+  section CNST 304B ops=15
+  section QUAD 1120B records=14×80B
+  section SEGS 128B records=4×32B
+  section LEAF 520B records=13×40B
+  section CLIP 192B records=4×48B
+  component Footer nodes=4 quads=2 segs=1 leaves=2 clips=1 ops=2 slots=1 instanceBytes=16 pool=336B
+  component item nodes=6 quads=4 segs=1 leaves=4 clips=1 ops=5 slots=4 instanceBytes=16 pool=496B
+  component Header nodes=8 quads=5 segs=1 leaves=5 clips=1 ops=4 slots=3 instanceBytes=16 pool=656B
+  component Main nodes=7 quads=3 segs=1 leaves=2 clips=1 ops=4 slots=6 instanceBytes=16 pool=576B
+  pool-budget total=2064B nodes=25 nodeBytes=2000B
+  canonical strings=43/63 content=12/14 texrefs=1/1
+  mask observable=0/64 (BIND 未进 M1 编译面) Layout=2/63 Visual=5/32 Text=2/32 Transform=7/32
+abi   QuadInstance 80B rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 extra@64
+abi   NodeRecord 80B cols=21
+topo  Footer  #0 n2_n3qd.XCenter=FollowDelta(<root>.Center) → #1 n2_n3qd.YMax=FollowDelta(<root>.Max)
+bind  Footer  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  item  #0 n3.XSize=FollowDelta(<root>.Size) → #1 n3.YMax=FollowDelta(<root>.Max) → #2 n4.XSize=FollowDelta(<root>.Size) → #3 n5.XSize=FollowDelta(<root>.Size) → #4 n6.XMax=FollowDelta(<root>.Max)
+bind  item  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  Header  #0 n2_n3qd.XCenter=FollowDelta(<root>.Center) → #1 n2_n3qd.YMax=FollowDelta(<root>.Max) → #2 n4_9sfl.XSize=FollowDelta(<root>.Size) → #3 n5_9sfl.XCenter=FollowDelta(<root>.Center)
+bind  Header  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  Main  #0 n19_n3qd.YSize=FollowDelta(<root>.Size) → #1 n20_n3qd.YSize=FollowDelta(<root>.Size) → #2 n21_9sfl.YSize=FollowDelta(<root>.Size) → #3 n22_9sfl.YSize=FollowDelta(<root>.Size)
+bind  Main  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)

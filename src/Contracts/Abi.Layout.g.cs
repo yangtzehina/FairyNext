@@ -54,6 +54,8 @@ public static class AbiLayout
     public const int FgbSectionDirEntrySize = 24;
     /// <summary>NODE 段列元素宽之和 = NodeTable 真值列 80B/节点</summary>
     public const int NodeBytesPerNode = 80;
+    /// <summary>实例块头定长；控制器状态与编译期 scratch 从其后切</summary>
+    public const int FgbInstanceHeaderBytes = 16;
 
     // ---- QuadInstance 字段（80B，16B 对齐） ----
     /// <summary>rect @0 +16：xy = 槽本地 min 角，zw = size</summary>
@@ -376,6 +378,10 @@ public static class AbiLayout
     public const uint FgbSectionHitt = 0x54544948u;
     /// <summary>「BRCH」：branch 元数据</summary>
     public const uint FgbSectionBrch = 0x48435242u;
+    /// <summary>「CONT」：内容条目表（contentRef 的目标；组件级降回运行时 Extract 的源）</summary>
+    public const uint FgbSectionCont = 0x544E4F43u;
+    /// <summary>「LOCL」：localId ⇄ 编辑器 id 映射</summary>
+    public const uint FgbSectionLocl = 0x4C434F4Cu;
 
     // ---- NODE 段列序（列序 = NodeTable ABI；实例化 memcpy 的正确性锚）----
     // 列下标即段内顺序；手写第二份列序是缺陷——读写两侧都从本表走。
@@ -466,6 +472,309 @@ public static class AbiLayout
     public const int NodeColResolvedRefSize = 4;
     public const bool NodeColResolvedRefRebase = false;
 
+    // ---- FgbComp 字段（96B）：COMP 记录（组件模板的全段区间） ----
+    /// <summary>nameStr @0 +4：组件名在 STRT 的下标</summary>
+    public const int FgbCompNameStrOffset = 0;
+    public const int FgbCompNameStrSize = 4;
+    /// <summary>nameHash @4 +4：组件名 FNV-1a 32（AssetServer.Resolve 的键）</summary>
+    public const int FgbCompNameHashOffset = 4;
+    public const int FgbCompNameHashSize = 4;
+    /// <summary>nodeStart @8 +4：NODE 段内节点起点（列内元素下标）</summary>
+    public const int FgbCompNodeStartOffset = 8;
+    public const int FgbCompNodeStartSize = 4;
+    /// <summary>nodeCount @12 +4：节点数（含局部 0 = 组件根）</summary>
+    public const int FgbCompNodeCountOffset = 12;
+    public const int FgbCompNodeCountSize = 4;
+    /// <summary>quadStart @16 +4：QUAD 段内实例起点</summary>
+    public const int FgbCompQuadStartOffset = 16;
+    public const int FgbCompQuadStartSize = 4;
+    /// <summary>quadCount @20 +4：实例数（含 slack 预留）</summary>
+    public const int FgbCompQuadCountOffset = 20;
+    public const int FgbCompQuadCountSize = 4;
+    /// <summary>segStart @24 +4：SEGS 段内起点</summary>
+    public const int FgbCompSegStartOffset = 24;
+    public const int FgbCompSegStartSize = 4;
+    /// <summary>segCount @28 +4：段数</summary>
+    public const int FgbCompSegCountOffset = 28;
+    public const int FgbCompSegCountSize = 4;
+    /// <summary>leafStart @32 +4：LEAF 段内起点</summary>
+    public const int FgbCompLeafStartOffset = 32;
+    public const int FgbCompLeafStartSize = 4;
+    /// <summary>leafCount @36 +4：叶数</summary>
+    public const int FgbCompLeafCountOffset = 36;
+    public const int FgbCompLeafCountSize = 4;
+    /// <summary>clipStart @40 +4：CLIP 段内起点</summary>
+    public const int FgbCompClipStartOffset = 40;
+    public const int FgbCompClipStartSize = 4;
+    /// <summary>clipCount @44 +4：ClipEntry 数（含条目 0 哨兵）</summary>
+    public const int FgbCompClipCountOffset = 44;
+    public const int FgbCompClipCountSize = 4;
+    /// <summary>cnstOpStart @48 +4：CNST 算子起点（数组索引即拓扑序）</summary>
+    public const int FgbCompCnstOpStartOffset = 48;
+    public const int FgbCompCnstOpStartSize = 4;
+    /// <summary>cnstOpCount @52 +4：算子数（0 = 本组件无关系）</summary>
+    public const int FgbCompCnstOpCountOffset = 52;
+    public const int FgbCompCnstOpCountSize = 4;
+    /// <summary>cnstFanStart @56 +4：FanOut CSR 桶起点（桶数 = nodeCount，掩码同起点）</summary>
+    public const int FgbCompCnstFanStartOffset = 56;
+    public const int FgbCompCnstFanStartSize = 4;
+    /// <summary>cnstIdxStart @60 +4：FanOut 算子下标池起点</summary>
+    public const int FgbCompCnstIdxStartOffset = 60;
+    public const int FgbCompCnstIdxStartSize = 4;
+    /// <summary>cnstIdxCount @64 +4：下标池长度</summary>
+    public const int FgbCompCnstIdxCountOffset = 64;
+    public const int FgbCompCnstIdxCountSize = 4;
+    /// <summary>localStart @68 +4：LOCL 段内起点</summary>
+    public const int FgbCompLocalStartOffset = 68;
+    public const int FgbCompLocalStartSize = 4;
+    /// <summary>localCount @72 +4：localId 条目数（= nodeCount）</summary>
+    public const int FgbCompLocalCountOffset = 72;
+    public const int FgbCompLocalCountSize = 4;
+    /// <summary>instanceBytes @76 +4：实例块字节（内存计划是承诺不是估计，运行期断言 15）</summary>
+    public const int FgbCompInstanceBytesOffset = 76;
+    public const int FgbCompInstanceBytesSize = 4;
+    /// <summary>sourceWidth @80 +4：组件源宽</summary>
+    public const int FgbCompSourceWidthOffset = 80;
+    public const int FgbCompSourceWidthSize = 4;
+    /// <summary>sourceHeight @84 +4：组件源高</summary>
+    public const int FgbCompSourceHeightOffset = 84;
+    public const int FgbCompSourceHeightSize = 4;
+    /// <summary>ctrlCount @88 +2：控制器数（M1 恒 0——BIND 归 M2 状态层）</summary>
+    public const int FgbCompCtrlCountOffset = 88;
+    public const int FgbCompCtrlCountSize = 2;
+    /// <summary>flags @90 +2：位域：bit0 有约束图 | bit1 有文本叶</summary>
+    public const int FgbCompFlagsOffset = 90;
+    public const int FgbCompFlagsSize = 2;
+    /// <summary>_reserved @92 +4：保留，写零（append-only：新字段从此切）</summary>
+    public const int FgbCompReservedOffset = 92;
+    public const int FgbCompReservedSize = 4;
+
+    /// <summary>COMP 记录（组件模板的全段区间） —— 记录定长。</summary>
+    public const int FgbCompSize = 96;
+
+    // ---- FgbCont 字段（80B）：CONT 记录（内容条目 = contentRef 的目标） ----
+    /// <summary>kind @0 +2：0 = 无内容（哨兵 0 号记录）| 1 = 叶 | 2 = 孤岛（M1-23）</summary>
+    public const int FgbContKindOffset = 0;
+    public const int FgbContKindSize = 2;
+    /// <summary>blend @2 +1：BlendClass（段键四类）</summary>
+    public const int FgbContBlendOffset = 2;
+    public const int FgbContBlendSize = 1;
+    /// <summary>flags @3 +1：bit0 九宫格 | bit1 整图平铺 | bit2 开裁剪域 | bit3 文本叶</summary>
+    public const int FgbContFlagsOffset = 3;
+    public const int FgbContFlagsSize = 1;
+    /// <summary>texId @4 +4：段键纹理 id（0 = 纯色；与 TREF 同源）</summary>
+    public const int FgbContTexIdOffset = 4;
+    public const int FgbContTexIdSize = 4;
+    /// <summary>baseColor @8 +4：未乘 α 基色 RGBA8（颜色纯函数的定义域）</summary>
+    public const int FgbContBaseColorOffset = 8;
+    public const int FgbContBaseColorSize = 4;
+    /// <summary>emitFlags @12 +4：发射器 flags</summary>
+    public const int FgbContEmitFlagsOffset = 12;
+    public const int FgbContEmitFlagsSize = 4;
+    /// <summary>slackHint @16 +4：预留实例数下限（文本叶 = 有轮廓字形数 + 1，不依赖宽高）</summary>
+    public const int FgbContSlackHintOffset = 16;
+    public const int FgbContSlackHintSize = 4;
+    /// <summary>tileGridIndice @20 +4：九宫平铺位掩码（M1 发射面拒发，有声计数）</summary>
+    public const int FgbContTileGridIndiceOffset = 20;
+    public const int FgbContTileGridIndiceSize = 4;
+    /// <summary>textStr @24 +4：文本串在 STRT 的下标（0 = 非文本）</summary>
+    public const int FgbContTextStrOffset = 24;
+    public const int FgbContTextStrSize = 4;
+    /// <summary>fillPack @28 +4：填充参数打包：method:8 | origin:8 | clockwise:1</summary>
+    public const int FgbContFillPackOffset = 28;
+    public const int FgbContFillPackSize = 4;
+    /// <summary>uvX0 @32 +4：UV xMin</summary>
+    public const int FgbContUvX0Offset = 32;
+    public const int FgbContUvX0Size = 4;
+    /// <summary>uvY0 @36 +4：UV yMin</summary>
+    public const int FgbContUvY0Offset = 36;
+    public const int FgbContUvY0Size = 4;
+    /// <summary>uvX1 @40 +4：UV xMax</summary>
+    public const int FgbContUvX1Offset = 40;
+    public const int FgbContUvX1Size = 4;
+    /// <summary>uvY1 @44 +4：UV yMax</summary>
+    public const int FgbContUvY1Offset = 44;
+    public const int FgbContUvY1Size = 4;
+    /// <summary>srcW @48 +4：图元源宽（像素）</summary>
+    public const int FgbContSourceWidthOffset = 48;
+    public const int FgbContSourceWidthSize = 4;
+    /// <summary>srcH @52 +4：图元源高（像素）</summary>
+    public const int FgbContSourceHeightOffset = 52;
+    public const int FgbContSourceHeightSize = 4;
+    /// <summary>gridX @56 +4：九宫格 x（源像素）</summary>
+    public const int FgbContGridXOffset = 56;
+    public const int FgbContGridXSize = 4;
+    /// <summary>gridY @60 +4：九宫格 y</summary>
+    public const int FgbContGridYOffset = 60;
+    public const int FgbContGridYSize = 4;
+    /// <summary>gridW @64 +4：九宫格 w</summary>
+    public const int FgbContGridWOffset = 64;
+    public const int FgbContGridWSize = 4;
+    /// <summary>gridH @68 +4：九宫格 h</summary>
+    public const int FgbContGridHOffset = 68;
+    public const int FgbContGridHSize = 4;
+    /// <summary>fillAmount @72 +4：填充完成比 [0,1]</summary>
+    public const int FgbContFillAmountOffset = 72;
+    public const int FgbContFillAmountSize = 4;
+    /// <summary>_reserved @76 +4：保留，写零</summary>
+    public const int FgbContReservedOffset = 76;
+    public const int FgbContReservedSize = 4;
+
+    /// <summary>CONT 记录（内容条目 = contentRef 的目标） —— 记录定长。</summary>
+    public const int FgbContSize = 80;
+
+    // ---- FgbLocal 字段（16B）：LOCL 记录（localId ⇄ 编辑器 id） ----
+    /// <summary>localId @0 +2：模板局部 id（0 = 组件根）</summary>
+    public const int FgbLocalLocalIdOffset = 0;
+    public const int FgbLocalLocalIdSize = 2;
+    /// <summary>flags @2 +2：bit0 = GGroup 真节点化产生的组节点</summary>
+    public const int FgbLocalFlagsOffset = 2;
+    public const int FgbLocalFlagsSize = 2;
+    /// <summary>editorIdStr @4 +4：编辑器 id 在 STRT 的下标（0 = 无）</summary>
+    public const int FgbLocalEditorIdStrOffset = 4;
+    public const int FgbLocalEditorIdStrSize = 4;
+    /// <summary>nameStr @8 +4：编辑器 name 在 STRT 的下标（0 = 无）</summary>
+    public const int FgbLocalNameStrOffset = 8;
+    public const int FgbLocalNameStrSize = 4;
+    /// <summary>editorIdHash @12 +4：编辑器 id 的 FNV-1a 32（陈旧可检测：arm 时比哈希链）</summary>
+    public const int FgbLocalEditorIdHashOffset = 12;
+    public const int FgbLocalEditorIdHashSize = 4;
+
+    /// <summary>LOCL 记录（localId ⇄ 编辑器 id） —— 记录定长。</summary>
+    public const int FgbLocalSize = 16;
+
+    // ---- FgbLeaf 字段（40B）：LEAF 记录（叶在冻结流里的落位） ----
+    /// <summary>localId @0 +2：叶节点的模板局部 id</summary>
+    public const int FgbLeafLocalIdOffset = 0;
+    public const int FgbLeafLocalIdSize = 2;
+    /// <summary>texSlot @2 +2：叶在所属段内的纹理槽</summary>
+    public const int FgbLeafTexSlotOffset = 2;
+    public const int FgbLeafTexSlotSize = 2;
+    /// <summary>quadStart @4 +4：首实例（**组件内相对**下标）</summary>
+    public const int FgbLeafQuadStartOffset = 4;
+    public const int FgbLeafQuadStartSize = 4;
+    /// <summary>quadCount @8 +4：在用实例数</summary>
+    public const int FgbLeafQuadCountOffset = 8;
+    public const int FgbLeafQuadCountSize = 4;
+    /// <summary>quadSlack @12 +4：预留实例数（写区间上界，≥ quadCount）</summary>
+    public const int FgbLeafQuadSlackOffset = 12;
+    public const int FgbLeafQuadSlackSize = 4;
+    /// <summary>segment @16 +4：所属段（组件内相对）</summary>
+    public const int FgbLeafSegmentOffset = 16;
+    public const int FgbLeafSegmentSize = 4;
+    /// <summary>run @20 +4：所属 run（组件内相对）</summary>
+    public const int FgbLeafRunOffset = 20;
+    public const int FgbLeafRunSize = 4;
+    /// <summary>clipEntry @24 +4：裁剪条目（组件内相对；0 = 不裁剪）</summary>
+    public const int FgbLeafClipEntryOffset = 24;
+    public const int FgbLeafClipEntrySize = 4;
+    /// <summary>slot @28 +4：transform 槽（0 = identity；实例化时 arm 重认领）</summary>
+    public const int FgbLeafSlotOffset = 28;
+    public const int FgbLeafSlotSize = 4;
+    /// <summary>contentRef @32 +4：CONT 下标（canonical id：同内容必同 id）</summary>
+    public const int FgbLeafContentRefOffset = 32;
+    public const int FgbLeafContentRefSize = 4;
+    /// <summary>emitFlags @36 +4：发射器 flags</summary>
+    public const int FgbLeafEmitFlagsOffset = 36;
+    public const int FgbLeafEmitFlagsSize = 4;
+
+    /// <summary>LEAF 记录（叶在冻结流里的落位） —— 记录定长。</summary>
+    public const int FgbLeafSize = 40;
+
+    // ---- FgbSeg 字段（32B）：SEGS 记录（段键 + 实例区间） ----
+    /// <summary>tex0 @0 +4：纹理槽 0</summary>
+    public const int FgbSegTex0Offset = 0;
+    public const int FgbSegTex0Size = 4;
+    /// <summary>tex1 @4 +4：纹理槽 1</summary>
+    public const int FgbSegTex1Offset = 4;
+    public const int FgbSegTex1Size = 4;
+    /// <summary>tex2 @8 +4：纹理槽 2</summary>
+    public const int FgbSegTex2Offset = 8;
+    public const int FgbSegTex2Size = 4;
+    /// <summary>tex3 @12 +4：纹理槽 3</summary>
+    public const int FgbSegTex3Offset = 12;
+    public const int FgbSegTex3Size = 4;
+    /// <summary>texCount @16 +1：在用纹理槽数（≤ SegmentMaxTextures）</summary>
+    public const int FgbSegTexCountOffset = 16;
+    public const int FgbSegTexCountSize = 1;
+    /// <summary>blend @17 +1：BlendClass（进段键，不是栅栏）</summary>
+    public const int FgbSegBlendOffset = 17;
+    public const int FgbSegBlendSize = 1;
+    /// <summary>_reserved @18 +2：保留，写零</summary>
+    public const int FgbSegReservedOffset = 18;
+    public const int FgbSegReservedSize = 2;
+    /// <summary>quadStart @20 +4：首实例（组件内相对）</summary>
+    public const int FgbSegQuadStartOffset = 20;
+    public const int FgbSegQuadStartSize = 4;
+    /// <summary>quadCount @24 +4：实例数</summary>
+    public const int FgbSegQuadCountOffset = 24;
+    public const int FgbSegQuadCountSize = 4;
+    /// <summary>run @28 +4：所属 run（组件内相对）</summary>
+    public const int FgbSegRunOffset = 28;
+    public const int FgbSegRunSize = 4;
+
+    /// <summary>SEGS 记录（段键 + 实例区间） —— 记录定长。</summary>
+    public const int FgbSegSize = 32;
+
+    // ---- FgbTexRef 字段（16B）：TREF 记录（纹理符号引用） ----
+    /// <summary>pkgId @0 +8：包 id 字符串的 FNV-1a 64（本包引用 = 自身 id）</summary>
+    public const int FgbTexRefPkgIdOffset = 0;
+    public const int FgbTexRefPkgIdSize = 8;
+    /// <summary>itemStr @8 +4：图集条目 id 在 STRT 的下标</summary>
+    public const int FgbTexRefItemStrOffset = 8;
+    public const int FgbTexRefItemStrSize = 4;
+    /// <summary>kind @12 +2：0 = 纹理（声音/骨骼按 append-only 续编号）</summary>
+    public const int FgbTexRefKindOffset = 12;
+    public const int FgbTexRefKindSize = 2;
+    /// <summary>texId @14 +2：段键纹理 id（包内分配序；QUAD 段键与本表同源）</summary>
+    public const int FgbTexRefTexIdOffset = 14;
+    public const int FgbTexRefTexIdSize = 2;
+
+    /// <summary>TREF 记录（纹理符号引用） —— 记录定长。</summary>
+    public const int FgbTexRefSize = 16;
+
+    // ---- FgbStrtHeader 字段（16B）：STRT 段头 ----
+    /// <summary>count @0 +4：条目数（下标 0 = 空串哨兵）</summary>
+    public const int FgbStrtHeaderCountOffset = 0;
+    public const int FgbStrtHeaderCountSize = 4;
+    /// <summary>poolBytes @4 +4：UTF-8 池字节数</summary>
+    public const int FgbStrtHeaderPoolBytesOffset = 4;
+    public const int FgbStrtHeaderPoolBytesSize = 4;
+    /// <summary>_reserved @8 +8：保留，写零（凑 16B 使条目数组自然对齐）</summary>
+    public const int FgbStrtHeaderReservedOffset = 8;
+    public const int FgbStrtHeaderReservedSize = 8;
+
+    /// <summary>STRT 段头 —— 记录定长。</summary>
+    public const int FgbStrtHeaderSize = 16;
+
+    // ---- FgbStrtEntry 字段（8B）：STRT 条目 ----
+    /// <summary>offset @0 +4：池内字节偏移</summary>
+    public const int FgbStrtEntryOffsetOffset = 0;
+    public const int FgbStrtEntryOffsetSize = 4;
+    /// <summary>length @4 +4：字节长（UTF-8）</summary>
+    public const int FgbStrtEntryLengthOffset = 4;
+    public const int FgbStrtEntryLengthSize = 4;
+
+    /// <summary>STRT 条目 —— 记录定长。</summary>
+    public const int FgbStrtEntrySize = 8;
+
+    // ---- FgbCnstHeader 字段（16B）：CNST 段头（四段数组总长） ----
+    /// <summary>opCount @0 +4：ConstraintOp 总条数（8B/条）</summary>
+    public const int FgbCnstHeaderOpCountOffset = 0;
+    public const int FgbCnstHeaderOpCountSize = 4;
+    /// <summary>fanCount @4 +4：FanOut 桶总数（4B/条；= 各组件 nodeCount 之和）</summary>
+    public const int FgbCnstHeaderFanCountOffset = 4;
+    public const int FgbCnstHeaderFanCountSize = 4;
+    /// <summary>indexCount @8 +4：FanOut 算子下标池长度（2B/条）</summary>
+    public const int FgbCnstHeaderIndexCountOffset = 8;
+    public const int FgbCnstHeaderIndexCountSize = 4;
+    /// <summary>maskCount @12 +4：布局归属掩码字节数（1B/节点；= fanCount）</summary>
+    public const int FgbCnstHeaderMaskCountOffset = 12;
+    public const int FgbCnstHeaderMaskCountSize = 4;
+
+    /// <summary>CNST 段头（四段数组总长） —— 记录定长。</summary>
+    public const int FgbCnstHeaderSize = 16;
+
     // ---- 编译期断言：字段首尾相接、末字段收口于结构尺寸、位域覆盖全 32 位 ----
     // 不成立即 1/0 → CS0020 编译错（L0 门：错误在跑起来之前死掉）。
     private const int AssertQuadRect = 1 / ((QuadRectOffset + QuadRectSize == QuadUvAOffset) ? 1 : 0);
@@ -518,6 +827,92 @@ public static class AbiLayout
     private const int AssertFgbFlagCompressed = 1 / ((FgbFlagCompressedShift + FgbFlagCompressedBits == FgbFlagReservedShift) ? 1 : 0);
     private const int AssertFgbFlagReserved = 1 / ((FgbFlagReservedShift + FgbFlagReservedBits == 32) ? 1 : 0);
     private const int AssertNodeColumnBytes = 1 / ((NodeColParentSize + NodeColFirstChildSize + NodeColNextSibSize + NodeColPrevSibSize + NodeColOwnerInstSize + NodeColLocalIdSize + NodeColTypeIdSize + NodeColPosXSize + NodeColPosYSize + NodeColWidthSize + NodeColHeightSize + NodeColScaleXSize + NodeColScaleYSize + NodeColRotationSize + NodeColSkewSize + NodeColPivotXSize + NodeColPivotYSize + NodeColLocalVisualSize + NodeColContentRefSize + NodeColStateRefSize + NodeColResolvedRefSize == NodeBytesPerNode) ? 1 : 0);
+    private const int AssertFgbCompNameStr = 1 / ((FgbCompNameStrOffset + FgbCompNameStrSize == FgbCompNameHashOffset) ? 1 : 0);
+    private const int AssertFgbCompNameHash = 1 / ((FgbCompNameHashOffset + FgbCompNameHashSize == FgbCompNodeStartOffset) ? 1 : 0);
+    private const int AssertFgbCompNodeStart = 1 / ((FgbCompNodeStartOffset + FgbCompNodeStartSize == FgbCompNodeCountOffset) ? 1 : 0);
+    private const int AssertFgbCompNodeCount = 1 / ((FgbCompNodeCountOffset + FgbCompNodeCountSize == FgbCompQuadStartOffset) ? 1 : 0);
+    private const int AssertFgbCompQuadStart = 1 / ((FgbCompQuadStartOffset + FgbCompQuadStartSize == FgbCompQuadCountOffset) ? 1 : 0);
+    private const int AssertFgbCompQuadCount = 1 / ((FgbCompQuadCountOffset + FgbCompQuadCountSize == FgbCompSegStartOffset) ? 1 : 0);
+    private const int AssertFgbCompSegStart = 1 / ((FgbCompSegStartOffset + FgbCompSegStartSize == FgbCompSegCountOffset) ? 1 : 0);
+    private const int AssertFgbCompSegCount = 1 / ((FgbCompSegCountOffset + FgbCompSegCountSize == FgbCompLeafStartOffset) ? 1 : 0);
+    private const int AssertFgbCompLeafStart = 1 / ((FgbCompLeafStartOffset + FgbCompLeafStartSize == FgbCompLeafCountOffset) ? 1 : 0);
+    private const int AssertFgbCompLeafCount = 1 / ((FgbCompLeafCountOffset + FgbCompLeafCountSize == FgbCompClipStartOffset) ? 1 : 0);
+    private const int AssertFgbCompClipStart = 1 / ((FgbCompClipStartOffset + FgbCompClipStartSize == FgbCompClipCountOffset) ? 1 : 0);
+    private const int AssertFgbCompClipCount = 1 / ((FgbCompClipCountOffset + FgbCompClipCountSize == FgbCompCnstOpStartOffset) ? 1 : 0);
+    private const int AssertFgbCompCnstOpStart = 1 / ((FgbCompCnstOpStartOffset + FgbCompCnstOpStartSize == FgbCompCnstOpCountOffset) ? 1 : 0);
+    private const int AssertFgbCompCnstOpCount = 1 / ((FgbCompCnstOpCountOffset + FgbCompCnstOpCountSize == FgbCompCnstFanStartOffset) ? 1 : 0);
+    private const int AssertFgbCompCnstFanStart = 1 / ((FgbCompCnstFanStartOffset + FgbCompCnstFanStartSize == FgbCompCnstIdxStartOffset) ? 1 : 0);
+    private const int AssertFgbCompCnstIdxStart = 1 / ((FgbCompCnstIdxStartOffset + FgbCompCnstIdxStartSize == FgbCompCnstIdxCountOffset) ? 1 : 0);
+    private const int AssertFgbCompCnstIdxCount = 1 / ((FgbCompCnstIdxCountOffset + FgbCompCnstIdxCountSize == FgbCompLocalStartOffset) ? 1 : 0);
+    private const int AssertFgbCompLocalStart = 1 / ((FgbCompLocalStartOffset + FgbCompLocalStartSize == FgbCompLocalCountOffset) ? 1 : 0);
+    private const int AssertFgbCompLocalCount = 1 / ((FgbCompLocalCountOffset + FgbCompLocalCountSize == FgbCompInstanceBytesOffset) ? 1 : 0);
+    private const int AssertFgbCompInstanceBytes = 1 / ((FgbCompInstanceBytesOffset + FgbCompInstanceBytesSize == FgbCompSourceWidthOffset) ? 1 : 0);
+    private const int AssertFgbCompSourceWidth = 1 / ((FgbCompSourceWidthOffset + FgbCompSourceWidthSize == FgbCompSourceHeightOffset) ? 1 : 0);
+    private const int AssertFgbCompSourceHeight = 1 / ((FgbCompSourceHeightOffset + FgbCompSourceHeightSize == FgbCompCtrlCountOffset) ? 1 : 0);
+    private const int AssertFgbCompCtrlCount = 1 / ((FgbCompCtrlCountOffset + FgbCompCtrlCountSize == FgbCompFlagsOffset) ? 1 : 0);
+    private const int AssertFgbCompFlags = 1 / ((FgbCompFlagsOffset + FgbCompFlagsSize == FgbCompReservedOffset) ? 1 : 0);
+    private const int AssertFgbCompReserved = 1 / ((FgbCompReservedOffset + FgbCompReservedSize == FgbCompSize) ? 1 : 0);
+    private const int AssertFgbContKind = 1 / ((FgbContKindOffset + FgbContKindSize == FgbContBlendOffset) ? 1 : 0);
+    private const int AssertFgbContBlend = 1 / ((FgbContBlendOffset + FgbContBlendSize == FgbContFlagsOffset) ? 1 : 0);
+    private const int AssertFgbContFlags = 1 / ((FgbContFlagsOffset + FgbContFlagsSize == FgbContTexIdOffset) ? 1 : 0);
+    private const int AssertFgbContTexId = 1 / ((FgbContTexIdOffset + FgbContTexIdSize == FgbContBaseColorOffset) ? 1 : 0);
+    private const int AssertFgbContBaseColor = 1 / ((FgbContBaseColorOffset + FgbContBaseColorSize == FgbContEmitFlagsOffset) ? 1 : 0);
+    private const int AssertFgbContEmitFlags = 1 / ((FgbContEmitFlagsOffset + FgbContEmitFlagsSize == FgbContSlackHintOffset) ? 1 : 0);
+    private const int AssertFgbContSlackHint = 1 / ((FgbContSlackHintOffset + FgbContSlackHintSize == FgbContTileGridIndiceOffset) ? 1 : 0);
+    private const int AssertFgbContTileGridIndice = 1 / ((FgbContTileGridIndiceOffset + FgbContTileGridIndiceSize == FgbContTextStrOffset) ? 1 : 0);
+    private const int AssertFgbContTextStr = 1 / ((FgbContTextStrOffset + FgbContTextStrSize == FgbContFillPackOffset) ? 1 : 0);
+    private const int AssertFgbContFillPack = 1 / ((FgbContFillPackOffset + FgbContFillPackSize == FgbContUvX0Offset) ? 1 : 0);
+    private const int AssertFgbContUvX0 = 1 / ((FgbContUvX0Offset + FgbContUvX0Size == FgbContUvY0Offset) ? 1 : 0);
+    private const int AssertFgbContUvY0 = 1 / ((FgbContUvY0Offset + FgbContUvY0Size == FgbContUvX1Offset) ? 1 : 0);
+    private const int AssertFgbContUvX1 = 1 / ((FgbContUvX1Offset + FgbContUvX1Size == FgbContUvY1Offset) ? 1 : 0);
+    private const int AssertFgbContUvY1 = 1 / ((FgbContUvY1Offset + FgbContUvY1Size == FgbContSourceWidthOffset) ? 1 : 0);
+    private const int AssertFgbContSourceWidth = 1 / ((FgbContSourceWidthOffset + FgbContSourceWidthSize == FgbContSourceHeightOffset) ? 1 : 0);
+    private const int AssertFgbContSourceHeight = 1 / ((FgbContSourceHeightOffset + FgbContSourceHeightSize == FgbContGridXOffset) ? 1 : 0);
+    private const int AssertFgbContGridX = 1 / ((FgbContGridXOffset + FgbContGridXSize == FgbContGridYOffset) ? 1 : 0);
+    private const int AssertFgbContGridY = 1 / ((FgbContGridYOffset + FgbContGridYSize == FgbContGridWOffset) ? 1 : 0);
+    private const int AssertFgbContGridW = 1 / ((FgbContGridWOffset + FgbContGridWSize == FgbContGridHOffset) ? 1 : 0);
+    private const int AssertFgbContGridH = 1 / ((FgbContGridHOffset + FgbContGridHSize == FgbContFillAmountOffset) ? 1 : 0);
+    private const int AssertFgbContFillAmount = 1 / ((FgbContFillAmountOffset + FgbContFillAmountSize == FgbContReservedOffset) ? 1 : 0);
+    private const int AssertFgbContReserved = 1 / ((FgbContReservedOffset + FgbContReservedSize == FgbContSize) ? 1 : 0);
+    private const int AssertFgbLocalLocalId = 1 / ((FgbLocalLocalIdOffset + FgbLocalLocalIdSize == FgbLocalFlagsOffset) ? 1 : 0);
+    private const int AssertFgbLocalFlags = 1 / ((FgbLocalFlagsOffset + FgbLocalFlagsSize == FgbLocalEditorIdStrOffset) ? 1 : 0);
+    private const int AssertFgbLocalEditorIdStr = 1 / ((FgbLocalEditorIdStrOffset + FgbLocalEditorIdStrSize == FgbLocalNameStrOffset) ? 1 : 0);
+    private const int AssertFgbLocalNameStr = 1 / ((FgbLocalNameStrOffset + FgbLocalNameStrSize == FgbLocalEditorIdHashOffset) ? 1 : 0);
+    private const int AssertFgbLocalEditorIdHash = 1 / ((FgbLocalEditorIdHashOffset + FgbLocalEditorIdHashSize == FgbLocalSize) ? 1 : 0);
+    private const int AssertFgbLeafLocalId = 1 / ((FgbLeafLocalIdOffset + FgbLeafLocalIdSize == FgbLeafTexSlotOffset) ? 1 : 0);
+    private const int AssertFgbLeafTexSlot = 1 / ((FgbLeafTexSlotOffset + FgbLeafTexSlotSize == FgbLeafQuadStartOffset) ? 1 : 0);
+    private const int AssertFgbLeafQuadStart = 1 / ((FgbLeafQuadStartOffset + FgbLeafQuadStartSize == FgbLeafQuadCountOffset) ? 1 : 0);
+    private const int AssertFgbLeafQuadCount = 1 / ((FgbLeafQuadCountOffset + FgbLeafQuadCountSize == FgbLeafQuadSlackOffset) ? 1 : 0);
+    private const int AssertFgbLeafQuadSlack = 1 / ((FgbLeafQuadSlackOffset + FgbLeafQuadSlackSize == FgbLeafSegmentOffset) ? 1 : 0);
+    private const int AssertFgbLeafSegment = 1 / ((FgbLeafSegmentOffset + FgbLeafSegmentSize == FgbLeafRunOffset) ? 1 : 0);
+    private const int AssertFgbLeafRun = 1 / ((FgbLeafRunOffset + FgbLeafRunSize == FgbLeafClipEntryOffset) ? 1 : 0);
+    private const int AssertFgbLeafClipEntry = 1 / ((FgbLeafClipEntryOffset + FgbLeafClipEntrySize == FgbLeafSlotOffset) ? 1 : 0);
+    private const int AssertFgbLeafSlot = 1 / ((FgbLeafSlotOffset + FgbLeafSlotSize == FgbLeafContentRefOffset) ? 1 : 0);
+    private const int AssertFgbLeafContentRef = 1 / ((FgbLeafContentRefOffset + FgbLeafContentRefSize == FgbLeafEmitFlagsOffset) ? 1 : 0);
+    private const int AssertFgbLeafEmitFlags = 1 / ((FgbLeafEmitFlagsOffset + FgbLeafEmitFlagsSize == FgbLeafSize) ? 1 : 0);
+    private const int AssertFgbSegTex0 = 1 / ((FgbSegTex0Offset + FgbSegTex0Size == FgbSegTex1Offset) ? 1 : 0);
+    private const int AssertFgbSegTex1 = 1 / ((FgbSegTex1Offset + FgbSegTex1Size == FgbSegTex2Offset) ? 1 : 0);
+    private const int AssertFgbSegTex2 = 1 / ((FgbSegTex2Offset + FgbSegTex2Size == FgbSegTex3Offset) ? 1 : 0);
+    private const int AssertFgbSegTex3 = 1 / ((FgbSegTex3Offset + FgbSegTex3Size == FgbSegTexCountOffset) ? 1 : 0);
+    private const int AssertFgbSegTexCount = 1 / ((FgbSegTexCountOffset + FgbSegTexCountSize == FgbSegBlendOffset) ? 1 : 0);
+    private const int AssertFgbSegBlend = 1 / ((FgbSegBlendOffset + FgbSegBlendSize == FgbSegReservedOffset) ? 1 : 0);
+    private const int AssertFgbSegReserved = 1 / ((FgbSegReservedOffset + FgbSegReservedSize == FgbSegQuadStartOffset) ? 1 : 0);
+    private const int AssertFgbSegQuadStart = 1 / ((FgbSegQuadStartOffset + FgbSegQuadStartSize == FgbSegQuadCountOffset) ? 1 : 0);
+    private const int AssertFgbSegQuadCount = 1 / ((FgbSegQuadCountOffset + FgbSegQuadCountSize == FgbSegRunOffset) ? 1 : 0);
+    private const int AssertFgbSegRun = 1 / ((FgbSegRunOffset + FgbSegRunSize == FgbSegSize) ? 1 : 0);
+    private const int AssertFgbTexRefPkgId = 1 / ((FgbTexRefPkgIdOffset + FgbTexRefPkgIdSize == FgbTexRefItemStrOffset) ? 1 : 0);
+    private const int AssertFgbTexRefItemStr = 1 / ((FgbTexRefItemStrOffset + FgbTexRefItemStrSize == FgbTexRefKindOffset) ? 1 : 0);
+    private const int AssertFgbTexRefKind = 1 / ((FgbTexRefKindOffset + FgbTexRefKindSize == FgbTexRefTexIdOffset) ? 1 : 0);
+    private const int AssertFgbTexRefTexId = 1 / ((FgbTexRefTexIdOffset + FgbTexRefTexIdSize == FgbTexRefSize) ? 1 : 0);
+    private const int AssertFgbStrtHeaderCount = 1 / ((FgbStrtHeaderCountOffset + FgbStrtHeaderCountSize == FgbStrtHeaderPoolBytesOffset) ? 1 : 0);
+    private const int AssertFgbStrtHeaderPoolBytes = 1 / ((FgbStrtHeaderPoolBytesOffset + FgbStrtHeaderPoolBytesSize == FgbStrtHeaderReservedOffset) ? 1 : 0);
+    private const int AssertFgbStrtHeaderReserved = 1 / ((FgbStrtHeaderReservedOffset + FgbStrtHeaderReservedSize == FgbStrtHeaderSize) ? 1 : 0);
+    private const int AssertFgbStrtEntryOffset = 1 / ((FgbStrtEntryOffsetOffset + FgbStrtEntryOffsetSize == FgbStrtEntryLengthOffset) ? 1 : 0);
+    private const int AssertFgbStrtEntryLength = 1 / ((FgbStrtEntryLengthOffset + FgbStrtEntryLengthSize == FgbStrtEntrySize) ? 1 : 0);
+    private const int AssertFgbCnstHeaderOpCount = 1 / ((FgbCnstHeaderOpCountOffset + FgbCnstHeaderOpCountSize == FgbCnstHeaderFanCountOffset) ? 1 : 0);
+    private const int AssertFgbCnstHeaderFanCount = 1 / ((FgbCnstHeaderFanCountOffset + FgbCnstHeaderFanCountSize == FgbCnstHeaderIndexCountOffset) ? 1 : 0);
+    private const int AssertFgbCnstHeaderIndexCount = 1 / ((FgbCnstHeaderIndexCountOffset + FgbCnstHeaderIndexCountSize == FgbCnstHeaderMaskCountOffset) ? 1 : 0);
+    private const int AssertFgbCnstHeaderMaskCount = 1 / ((FgbCnstHeaderMaskCountOffset + FgbCnstHeaderMaskCountSize == FgbCnstHeaderSize) ? 1 : 0);
 
     /// <summary>
     /// 定义点交叉校验：本文件常量 vs <see cref="Abi"/> 数据表。null = 一致；
@@ -525,7 +920,7 @@ public static class AbiLayout
     /// </summary>
     public static string? Verify()
     {
-        if (Abi.Scalars.Length != 19) return "Abi.Scalars 表长与生成物不符";
+        if (Abi.Scalars.Length != 20) return "Abi.Scalars 表长与生成物不符";
         if (Abi.Scalars[0].Value != FgbMagic) return "标量 FgbMagic 与生成物不符";
         if (Abi.Scalars[1].Value != FgbFormatVersion) return "标量 FgbFormatVersion 与生成物不符";
         if (Abi.Scalars[2].Value != FgbSectionAlignment) return "标量 FgbSectionAlignment 与生成物不符";
@@ -545,6 +940,7 @@ public static class AbiLayout
         if (Abi.Scalars[16].Value != FgbHeaderSize) return "标量 FgbHeaderSize 与生成物不符";
         if (Abi.Scalars[17].Value != FgbSectionDirEntrySize) return "标量 FgbSectionDirEntrySize 与生成物不符";
         if (Abi.Scalars[18].Value != NodeBytesPerNode) return "标量 NodeBytesPerNode 与生成物不符";
+        if (Abi.Scalars[19].Value != FgbInstanceHeaderBytes) return "标量 FgbInstanceHeaderBytes 与生成物不符";
         if (Abi.QuadInstanceFields.Length != 8) return "Abi.QuadInstanceFields 表长与生成物不符";
         if (Abi.QuadInstanceFields[0].Offset != QuadRectOffset || Abi.QuadInstanceFields[0].Size != QuadRectSize) return "QuadRect 偏移/大小与生成物不符";
         if (Abi.QuadInstanceFields[1].Offset != QuadUvAOffset || Abi.QuadInstanceFields[1].Size != QuadUvASize) return "QuadUvA 偏移/大小与生成物不符";
@@ -624,7 +1020,7 @@ public static class AbiLayout
         if (Abi.FgbFlagBits[0].Shift != FgbFlagLittleEndianShift || Abi.FgbFlagBits[0].Width != FgbFlagLittleEndianBits) return "FgbFlagLittleEndian 位域与生成物不符";
         if (Abi.FgbFlagBits[1].Shift != FgbFlagCompressedShift || Abi.FgbFlagBits[1].Width != FgbFlagCompressedBits) return "FgbFlagCompressed 位域与生成物不符";
         if (Abi.FgbFlagBits[2].Shift != FgbFlagReservedShift || Abi.FgbFlagBits[2].Width != FgbFlagReservedBits) return "FgbFlagReserved 位域与生成物不符";
-        if (Abi.FgbSectionIds.Length != 18) return "Abi.FgbSectionIds 表长与生成物不符";
+        if (Abi.FgbSectionIds.Length != 20) return "Abi.FgbSectionIds 表长与生成物不符";
         if (Abi.FgbSectionIds[0].Value != FgbSectionStrt) return "fourcc Strt 与生成物不符";
         if (Abi.FgbSectionIds[1].Value != FgbSectionLang) return "fourcc Lang 与生成物不符";
         if (Abi.FgbSectionIds[2].Value != FgbSectionComp) return "fourcc Comp 与生成物不符";
@@ -643,6 +1039,8 @@ public static class AbiLayout
         if (Abi.FgbSectionIds[15].Value != FgbSectionDeps) return "fourcc Deps 与生成物不符";
         if (Abi.FgbSectionIds[16].Value != FgbSectionHitt) return "fourcc Hitt 与生成物不符";
         if (Abi.FgbSectionIds[17].Value != FgbSectionBrch) return "fourcc Brch 与生成物不符";
+        if (Abi.FgbSectionIds[18].Value != FgbSectionCont) return "fourcc Cont 与生成物不符";
+        if (Abi.FgbSectionIds[19].Value != FgbSectionLocl) return "fourcc Locl 与生成物不符";
         if (Abi.NodeColumns.Length != NodeColumnCount) return "Abi.NodeColumns 表长与生成物不符";
         if (Abi.NodeColumns[0].ElementSize != NodeColParentSize || Abi.NodeColumns[0].Rebase != NodeColParentRebase) return "NODE 列 Parent 与生成物不符";
         if (Abi.NodeColumns[1].ElementSize != NodeColFirstChildSize || Abi.NodeColumns[1].Rebase != NodeColFirstChildRebase) return "NODE 列 FirstChild 与生成物不符";
@@ -665,6 +1063,111 @@ public static class AbiLayout
         if (Abi.NodeColumns[18].ElementSize != NodeColContentRefSize || Abi.NodeColumns[18].Rebase != NodeColContentRefRebase) return "NODE 列 ContentRef 与生成物不符";
         if (Abi.NodeColumns[19].ElementSize != NodeColStateRefSize || Abi.NodeColumns[19].Rebase != NodeColStateRefRebase) return "NODE 列 StateRef 与生成物不符";
         if (Abi.NodeColumns[20].ElementSize != NodeColResolvedRefSize || Abi.NodeColumns[20].Rebase != NodeColResolvedRefRebase) return "NODE 列 ResolvedRef 与生成物不符";
+        if (Abi.FgbRecords.Length != 9) return "Abi.FgbRecords 表长与生成物不符";
+        if (Abi.FgbRecords[0].Size != FgbCompSize) return "记录 Comp 定长与生成物不符";
+        if (Abi.FgbRecords[0].Fields.Length != 25) return "Abi.FgbRecords[0].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[0].Fields[0].Offset != FgbCompNameStrOffset || Abi.FgbRecords[0].Fields[0].Size != FgbCompNameStrSize) return "FgbCompNameStr 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[1].Offset != FgbCompNameHashOffset || Abi.FgbRecords[0].Fields[1].Size != FgbCompNameHashSize) return "FgbCompNameHash 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[2].Offset != FgbCompNodeStartOffset || Abi.FgbRecords[0].Fields[2].Size != FgbCompNodeStartSize) return "FgbCompNodeStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[3].Offset != FgbCompNodeCountOffset || Abi.FgbRecords[0].Fields[3].Size != FgbCompNodeCountSize) return "FgbCompNodeCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[4].Offset != FgbCompQuadStartOffset || Abi.FgbRecords[0].Fields[4].Size != FgbCompQuadStartSize) return "FgbCompQuadStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[5].Offset != FgbCompQuadCountOffset || Abi.FgbRecords[0].Fields[5].Size != FgbCompQuadCountSize) return "FgbCompQuadCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[6].Offset != FgbCompSegStartOffset || Abi.FgbRecords[0].Fields[6].Size != FgbCompSegStartSize) return "FgbCompSegStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[7].Offset != FgbCompSegCountOffset || Abi.FgbRecords[0].Fields[7].Size != FgbCompSegCountSize) return "FgbCompSegCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[8].Offset != FgbCompLeafStartOffset || Abi.FgbRecords[0].Fields[8].Size != FgbCompLeafStartSize) return "FgbCompLeafStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[9].Offset != FgbCompLeafCountOffset || Abi.FgbRecords[0].Fields[9].Size != FgbCompLeafCountSize) return "FgbCompLeafCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[10].Offset != FgbCompClipStartOffset || Abi.FgbRecords[0].Fields[10].Size != FgbCompClipStartSize) return "FgbCompClipStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[11].Offset != FgbCompClipCountOffset || Abi.FgbRecords[0].Fields[11].Size != FgbCompClipCountSize) return "FgbCompClipCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[12].Offset != FgbCompCnstOpStartOffset || Abi.FgbRecords[0].Fields[12].Size != FgbCompCnstOpStartSize) return "FgbCompCnstOpStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[13].Offset != FgbCompCnstOpCountOffset || Abi.FgbRecords[0].Fields[13].Size != FgbCompCnstOpCountSize) return "FgbCompCnstOpCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[14].Offset != FgbCompCnstFanStartOffset || Abi.FgbRecords[0].Fields[14].Size != FgbCompCnstFanStartSize) return "FgbCompCnstFanStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[15].Offset != FgbCompCnstIdxStartOffset || Abi.FgbRecords[0].Fields[15].Size != FgbCompCnstIdxStartSize) return "FgbCompCnstIdxStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[16].Offset != FgbCompCnstIdxCountOffset || Abi.FgbRecords[0].Fields[16].Size != FgbCompCnstIdxCountSize) return "FgbCompCnstIdxCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[17].Offset != FgbCompLocalStartOffset || Abi.FgbRecords[0].Fields[17].Size != FgbCompLocalStartSize) return "FgbCompLocalStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[18].Offset != FgbCompLocalCountOffset || Abi.FgbRecords[0].Fields[18].Size != FgbCompLocalCountSize) return "FgbCompLocalCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[19].Offset != FgbCompInstanceBytesOffset || Abi.FgbRecords[0].Fields[19].Size != FgbCompInstanceBytesSize) return "FgbCompInstanceBytes 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[20].Offset != FgbCompSourceWidthOffset || Abi.FgbRecords[0].Fields[20].Size != FgbCompSourceWidthSize) return "FgbCompSourceWidth 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[21].Offset != FgbCompSourceHeightOffset || Abi.FgbRecords[0].Fields[21].Size != FgbCompSourceHeightSize) return "FgbCompSourceHeight 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[22].Offset != FgbCompCtrlCountOffset || Abi.FgbRecords[0].Fields[22].Size != FgbCompCtrlCountSize) return "FgbCompCtrlCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[23].Offset != FgbCompFlagsOffset || Abi.FgbRecords[0].Fields[23].Size != FgbCompFlagsSize) return "FgbCompFlags 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[0].Fields[24].Offset != FgbCompReservedOffset || Abi.FgbRecords[0].Fields[24].Size != FgbCompReservedSize) return "FgbCompReserved 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Size != FgbContSize) return "记录 Cont 定长与生成物不符";
+        if (Abi.FgbRecords[1].Fields.Length != 22) return "Abi.FgbRecords[1].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[1].Fields[0].Offset != FgbContKindOffset || Abi.FgbRecords[1].Fields[0].Size != FgbContKindSize) return "FgbContKind 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[1].Offset != FgbContBlendOffset || Abi.FgbRecords[1].Fields[1].Size != FgbContBlendSize) return "FgbContBlend 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[2].Offset != FgbContFlagsOffset || Abi.FgbRecords[1].Fields[2].Size != FgbContFlagsSize) return "FgbContFlags 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[3].Offset != FgbContTexIdOffset || Abi.FgbRecords[1].Fields[3].Size != FgbContTexIdSize) return "FgbContTexId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[4].Offset != FgbContBaseColorOffset || Abi.FgbRecords[1].Fields[4].Size != FgbContBaseColorSize) return "FgbContBaseColor 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[5].Offset != FgbContEmitFlagsOffset || Abi.FgbRecords[1].Fields[5].Size != FgbContEmitFlagsSize) return "FgbContEmitFlags 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[6].Offset != FgbContSlackHintOffset || Abi.FgbRecords[1].Fields[6].Size != FgbContSlackHintSize) return "FgbContSlackHint 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[7].Offset != FgbContTileGridIndiceOffset || Abi.FgbRecords[1].Fields[7].Size != FgbContTileGridIndiceSize) return "FgbContTileGridIndice 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[8].Offset != FgbContTextStrOffset || Abi.FgbRecords[1].Fields[8].Size != FgbContTextStrSize) return "FgbContTextStr 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[9].Offset != FgbContFillPackOffset || Abi.FgbRecords[1].Fields[9].Size != FgbContFillPackSize) return "FgbContFillPack 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[10].Offset != FgbContUvX0Offset || Abi.FgbRecords[1].Fields[10].Size != FgbContUvX0Size) return "FgbContUvX0 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[11].Offset != FgbContUvY0Offset || Abi.FgbRecords[1].Fields[11].Size != FgbContUvY0Size) return "FgbContUvY0 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[12].Offset != FgbContUvX1Offset || Abi.FgbRecords[1].Fields[12].Size != FgbContUvX1Size) return "FgbContUvX1 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[13].Offset != FgbContUvY1Offset || Abi.FgbRecords[1].Fields[13].Size != FgbContUvY1Size) return "FgbContUvY1 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[14].Offset != FgbContSourceWidthOffset || Abi.FgbRecords[1].Fields[14].Size != FgbContSourceWidthSize) return "FgbContSourceWidth 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[15].Offset != FgbContSourceHeightOffset || Abi.FgbRecords[1].Fields[15].Size != FgbContSourceHeightSize) return "FgbContSourceHeight 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[16].Offset != FgbContGridXOffset || Abi.FgbRecords[1].Fields[16].Size != FgbContGridXSize) return "FgbContGridX 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[17].Offset != FgbContGridYOffset || Abi.FgbRecords[1].Fields[17].Size != FgbContGridYSize) return "FgbContGridY 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[18].Offset != FgbContGridWOffset || Abi.FgbRecords[1].Fields[18].Size != FgbContGridWSize) return "FgbContGridW 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[19].Offset != FgbContGridHOffset || Abi.FgbRecords[1].Fields[19].Size != FgbContGridHSize) return "FgbContGridH 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[20].Offset != FgbContFillAmountOffset || Abi.FgbRecords[1].Fields[20].Size != FgbContFillAmountSize) return "FgbContFillAmount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[1].Fields[21].Offset != FgbContReservedOffset || Abi.FgbRecords[1].Fields[21].Size != FgbContReservedSize) return "FgbContReserved 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[2].Size != FgbLocalSize) return "记录 Local 定长与生成物不符";
+        if (Abi.FgbRecords[2].Fields.Length != 5) return "Abi.FgbRecords[2].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[2].Fields[0].Offset != FgbLocalLocalIdOffset || Abi.FgbRecords[2].Fields[0].Size != FgbLocalLocalIdSize) return "FgbLocalLocalId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[2].Fields[1].Offset != FgbLocalFlagsOffset || Abi.FgbRecords[2].Fields[1].Size != FgbLocalFlagsSize) return "FgbLocalFlags 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[2].Fields[2].Offset != FgbLocalEditorIdStrOffset || Abi.FgbRecords[2].Fields[2].Size != FgbLocalEditorIdStrSize) return "FgbLocalEditorIdStr 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[2].Fields[3].Offset != FgbLocalNameStrOffset || Abi.FgbRecords[2].Fields[3].Size != FgbLocalNameStrSize) return "FgbLocalNameStr 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[2].Fields[4].Offset != FgbLocalEditorIdHashOffset || Abi.FgbRecords[2].Fields[4].Size != FgbLocalEditorIdHashSize) return "FgbLocalEditorIdHash 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Size != FgbLeafSize) return "记录 Leaf 定长与生成物不符";
+        if (Abi.FgbRecords[3].Fields.Length != 11) return "Abi.FgbRecords[3].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[3].Fields[0].Offset != FgbLeafLocalIdOffset || Abi.FgbRecords[3].Fields[0].Size != FgbLeafLocalIdSize) return "FgbLeafLocalId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[1].Offset != FgbLeafTexSlotOffset || Abi.FgbRecords[3].Fields[1].Size != FgbLeafTexSlotSize) return "FgbLeafTexSlot 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[2].Offset != FgbLeafQuadStartOffset || Abi.FgbRecords[3].Fields[2].Size != FgbLeafQuadStartSize) return "FgbLeafQuadStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[3].Offset != FgbLeafQuadCountOffset || Abi.FgbRecords[3].Fields[3].Size != FgbLeafQuadCountSize) return "FgbLeafQuadCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[4].Offset != FgbLeafQuadSlackOffset || Abi.FgbRecords[3].Fields[4].Size != FgbLeafQuadSlackSize) return "FgbLeafQuadSlack 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[5].Offset != FgbLeafSegmentOffset || Abi.FgbRecords[3].Fields[5].Size != FgbLeafSegmentSize) return "FgbLeafSegment 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[6].Offset != FgbLeafRunOffset || Abi.FgbRecords[3].Fields[6].Size != FgbLeafRunSize) return "FgbLeafRun 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[7].Offset != FgbLeafClipEntryOffset || Abi.FgbRecords[3].Fields[7].Size != FgbLeafClipEntrySize) return "FgbLeafClipEntry 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[8].Offset != FgbLeafSlotOffset || Abi.FgbRecords[3].Fields[8].Size != FgbLeafSlotSize) return "FgbLeafSlot 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[9].Offset != FgbLeafContentRefOffset || Abi.FgbRecords[3].Fields[9].Size != FgbLeafContentRefSize) return "FgbLeafContentRef 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[3].Fields[10].Offset != FgbLeafEmitFlagsOffset || Abi.FgbRecords[3].Fields[10].Size != FgbLeafEmitFlagsSize) return "FgbLeafEmitFlags 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Size != FgbSegSize) return "记录 Seg 定长与生成物不符";
+        if (Abi.FgbRecords[4].Fields.Length != 10) return "Abi.FgbRecords[4].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[4].Fields[0].Offset != FgbSegTex0Offset || Abi.FgbRecords[4].Fields[0].Size != FgbSegTex0Size) return "FgbSegTex0 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[1].Offset != FgbSegTex1Offset || Abi.FgbRecords[4].Fields[1].Size != FgbSegTex1Size) return "FgbSegTex1 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[2].Offset != FgbSegTex2Offset || Abi.FgbRecords[4].Fields[2].Size != FgbSegTex2Size) return "FgbSegTex2 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[3].Offset != FgbSegTex3Offset || Abi.FgbRecords[4].Fields[3].Size != FgbSegTex3Size) return "FgbSegTex3 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[4].Offset != FgbSegTexCountOffset || Abi.FgbRecords[4].Fields[4].Size != FgbSegTexCountSize) return "FgbSegTexCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[5].Offset != FgbSegBlendOffset || Abi.FgbRecords[4].Fields[5].Size != FgbSegBlendSize) return "FgbSegBlend 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[6].Offset != FgbSegReservedOffset || Abi.FgbRecords[4].Fields[6].Size != FgbSegReservedSize) return "FgbSegReserved 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[7].Offset != FgbSegQuadStartOffset || Abi.FgbRecords[4].Fields[7].Size != FgbSegQuadStartSize) return "FgbSegQuadStart 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[8].Offset != FgbSegQuadCountOffset || Abi.FgbRecords[4].Fields[8].Size != FgbSegQuadCountSize) return "FgbSegQuadCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[4].Fields[9].Offset != FgbSegRunOffset || Abi.FgbRecords[4].Fields[9].Size != FgbSegRunSize) return "FgbSegRun 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[5].Size != FgbTexRefSize) return "记录 TexRef 定长与生成物不符";
+        if (Abi.FgbRecords[5].Fields.Length != 4) return "Abi.FgbRecords[5].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[5].Fields[0].Offset != FgbTexRefPkgIdOffset || Abi.FgbRecords[5].Fields[0].Size != FgbTexRefPkgIdSize) return "FgbTexRefPkgId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[5].Fields[1].Offset != FgbTexRefItemStrOffset || Abi.FgbRecords[5].Fields[1].Size != FgbTexRefItemStrSize) return "FgbTexRefItemStr 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[5].Fields[2].Offset != FgbTexRefKindOffset || Abi.FgbRecords[5].Fields[2].Size != FgbTexRefKindSize) return "FgbTexRefKind 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[5].Fields[3].Offset != FgbTexRefTexIdOffset || Abi.FgbRecords[5].Fields[3].Size != FgbTexRefTexIdSize) return "FgbTexRefTexId 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[6].Size != FgbStrtHeaderSize) return "记录 StrtHeader 定长与生成物不符";
+        if (Abi.FgbRecords[6].Fields.Length != 3) return "Abi.FgbRecords[6].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[6].Fields[0].Offset != FgbStrtHeaderCountOffset || Abi.FgbRecords[6].Fields[0].Size != FgbStrtHeaderCountSize) return "FgbStrtHeaderCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[6].Fields[1].Offset != FgbStrtHeaderPoolBytesOffset || Abi.FgbRecords[6].Fields[1].Size != FgbStrtHeaderPoolBytesSize) return "FgbStrtHeaderPoolBytes 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[6].Fields[2].Offset != FgbStrtHeaderReservedOffset || Abi.FgbRecords[6].Fields[2].Size != FgbStrtHeaderReservedSize) return "FgbStrtHeaderReserved 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[7].Size != FgbStrtEntrySize) return "记录 StrtEntry 定长与生成物不符";
+        if (Abi.FgbRecords[7].Fields.Length != 2) return "Abi.FgbRecords[7].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[7].Fields[0].Offset != FgbStrtEntryOffsetOffset || Abi.FgbRecords[7].Fields[0].Size != FgbStrtEntryOffsetSize) return "FgbStrtEntryOffset 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[7].Fields[1].Offset != FgbStrtEntryLengthOffset || Abi.FgbRecords[7].Fields[1].Size != FgbStrtEntryLengthSize) return "FgbStrtEntryLength 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[8].Size != FgbCnstHeaderSize) return "记录 CnstHeader 定长与生成物不符";
+        if (Abi.FgbRecords[8].Fields.Length != 4) return "Abi.FgbRecords[8].Fields 表长与生成物不符";
+        if (Abi.FgbRecords[8].Fields[0].Offset != FgbCnstHeaderOpCountOffset || Abi.FgbRecords[8].Fields[0].Size != FgbCnstHeaderOpCountSize) return "FgbCnstHeaderOpCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[8].Fields[1].Offset != FgbCnstHeaderFanCountOffset || Abi.FgbRecords[8].Fields[1].Size != FgbCnstHeaderFanCountSize) return "FgbCnstHeaderFanCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[8].Fields[2].Offset != FgbCnstHeaderIndexCountOffset || Abi.FgbRecords[8].Fields[2].Size != FgbCnstHeaderIndexCountSize) return "FgbCnstHeaderIndexCount 偏移/大小与生成物不符";
+        if (Abi.FgbRecords[8].Fields[3].Offset != FgbCnstHeaderMaskCountOffset || Abi.FgbRecords[8].Fields[3].Size != FgbCnstHeaderMaskCountSize) return "FgbCnstHeaderMaskCount 偏移/大小与生成物不符";
         return null;
     }
 }

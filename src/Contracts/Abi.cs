@@ -32,6 +32,9 @@ public enum AbiFieldKind : byte
     UInt64 = 4,
     UInt16 = 5,
     Float32 = 6,
+    // ---- M1-20b 追加（append-only）：FGB 定长记录里的有符号 32 位与单字节字段 ----
+    Int32 = 7,
+    UInt8 = 8,
 }
 
 /// <summary>生成物投放面：标量按此决定进哪几份产物（位域与字段表三份全进）。</summary>
@@ -145,6 +148,34 @@ public readonly struct AbiNodeColumn
     }
 }
 
+/// <summary>
+/// 一条 FGB 定长记录的完整布局（M1-20b）。「FGB 全部记录布局集中为纯数据 C# 文件」
+/// （编译平面机制 8）在 M1-19 只覆盖了头/目录/NODE 列；本类型把**段内记录**一并纳入：
+/// 写侧（<c>FgbFreezer</c>）与读侧（M1-22 装载、测试读回对账）都只从生成物的
+/// <c>Fgb{Name}{Field}Offset</c> 取偏移，手抄第二份偏移量是缺陷。
+/// 相邻字段必须首尾相接、末字段收口于 <see cref="Size"/>——生成物内含编译期断言。
+/// 记录布局变更（增/删/改宽/重排）必 bump <see cref="Abi.FgbFormatVersion"/>；
+/// 新字段只从末尾的保留区切（append-only）。
+/// </summary>
+public readonly struct AbiRecord
+{
+    /// <summary>记录名（生成物常量前缀 = <c>Fgb</c> + 本名）。</summary>
+    public readonly string Name;
+    /// <summary>记录字节数。</summary>
+    public readonly int Size;
+    /// <summary>字段表（声明序 = 偏移升序）。</summary>
+    public readonly AbiField[] Fields;
+    public readonly string Doc;
+
+    public AbiRecord(string name, int size, AbiField[] fields, string doc)
+    {
+        Name = name;
+        Size = size;
+        Fields = fields;
+        Doc = doc;
+    }
+}
+
 /// <summary>FGB 段 fourcc（M1-19）。id append-only：值一经入库永不复用；未知 fourcc 读取器整段跳过。</summary>
 public readonly struct AbiFourcc
 {
@@ -239,6 +270,8 @@ public static class Abi
         new AbiScalar("FgbHeaderSize", FgbHeaderSize, false, AbiScope.CSharp, "FgbHeader 定长（16B 对齐；布局 = FgbHeaderFields）"),
         new AbiScalar("FgbSectionDirEntrySize", FgbSectionDirEntrySize, false, AbiScope.CSharp, "SectionDir 条目定长（布局 = FgbSectionDirFields）"),
         new AbiScalar("NodeBytesPerNode", NodeBytesPerNode, false, AbiScope.CSharp, "NODE 段列元素宽之和 = NodeTable 真值列 80B/节点"),
+        // ---- M1-20b 追加（append-only：只在表尾续，不插空）----
+        new AbiScalar("FgbInstanceHeaderBytes", FgbInstanceHeaderBytes, false, AbiScope.CSharp, "实例块头定长；控制器状态与编译期 scratch 从其后切"),
     };
 
     /// <summary>
@@ -425,6 +458,9 @@ public static class Abi
         new AbiFourcc("Deps", 0x53504544, "依赖包 { pkgId, expectedSourceHash }[]"),
         new AbiFourcc("Hitt", 0x54544948, "像素点击测试位图"),
         new AbiFourcc("Brch", 0x48435242, "branch 元数据"),
+        // ---- M1-20b 追加（append-only：只在表尾续，值永不复用）----
+        new AbiFourcc("Cont", 0x544E4F43, "内容条目表（contentRef 的目标；组件级降回运行时 Extract 的源）"),
+        new AbiFourcc("Locl", 0x4C434F4C, "localId ⇄ 编辑器 id 映射"),
     };
 
     /// <summary>
@@ -456,5 +492,178 @@ public static class Abi
         new AbiNodeColumn("ContentRef", 4, AbiFieldKind.UInt32, false, "内容侧表引用（不是节点下标，不回填）"),
         new AbiNodeColumn("StateRef", 4, AbiFieldKind.UInt32, false, "状态侧表引用"),
         new AbiNodeColumn("ResolvedRef", 4, AbiFieldKind.UInt32, false, "resolved 几何槽引用（实例化批量分配后不再变，不变量 7）"),
+    };
+
+    // ========================================================================
+    // FGB 段内定长记录布局（M1-20b）。M1-19 只把头/目录/NODE 列做成数据表；冻结各段时
+    // 出现的第二批记录（COMP/CONT/LOCL/LEAF/SEGS/TREF/STRT/CNST 头）在此收口——
+    // 「FGB 全部记录布局集中为纯数据 C# 文件」（机制 8）自此对全段成立。
+    // 记录字节数一律取 4/8/16 的整倍数使 MemoryMarshal.Cast 直读不越对齐；
+    // 段起点的 16B 对齐由容器（FgbWriter）保证，记录内部只需自然对齐。
+    // ========================================================================
+
+    /// <summary>实例块头字节数（PLAN 实例化的定长部分；控制器状态与编译期 scratch 从其后切）。</summary>
+    public const int FgbInstanceHeaderBytes = 16;
+
+    /// <summary>
+    /// COMP 记录：一个组件模板在包内的全部段区间。所有 Start/Count 都是**段内记录下标**
+    /// （不是字节偏移）——段的记录宽由本表定，下标 × 宽即偏移，装载期不需要第二张目录。
+    /// </summary>
+    public static readonly AbiField[] FgbCompFields =
+    {
+        new AbiField("NameStr", "nameStr", 0, 4, AbiFieldKind.UInt32, "组件名在 STRT 的下标"),
+        new AbiField("NameHash", "nameHash", 4, 4, AbiFieldKind.UInt32, "组件名 FNV-1a 32（AssetServer.Resolve 的键）"),
+        new AbiField("NodeStart", "nodeStart", 8, 4, AbiFieldKind.UInt32, "NODE 段内节点起点（列内元素下标）"),
+        new AbiField("NodeCount", "nodeCount", 12, 4, AbiFieldKind.UInt32, "节点数（含局部 0 = 组件根）"),
+        new AbiField("QuadStart", "quadStart", 16, 4, AbiFieldKind.UInt32, "QUAD 段内实例起点"),
+        new AbiField("QuadCount", "quadCount", 20, 4, AbiFieldKind.UInt32, "实例数（含 slack 预留）"),
+        new AbiField("SegStart", "segStart", 24, 4, AbiFieldKind.UInt32, "SEGS 段内起点"),
+        new AbiField("SegCount", "segCount", 28, 4, AbiFieldKind.UInt32, "段数"),
+        new AbiField("LeafStart", "leafStart", 32, 4, AbiFieldKind.UInt32, "LEAF 段内起点"),
+        new AbiField("LeafCount", "leafCount", 36, 4, AbiFieldKind.UInt32, "叶数"),
+        new AbiField("ClipStart", "clipStart", 40, 4, AbiFieldKind.UInt32, "CLIP 段内起点"),
+        new AbiField("ClipCount", "clipCount", 44, 4, AbiFieldKind.UInt32, "ClipEntry 数（含条目 0 哨兵）"),
+        new AbiField("CnstOpStart", "cnstOpStart", 48, 4, AbiFieldKind.UInt32, "CNST 算子起点（数组索引即拓扑序）"),
+        new AbiField("CnstOpCount", "cnstOpCount", 52, 4, AbiFieldKind.UInt32, "算子数（0 = 本组件无关系）"),
+        new AbiField("CnstFanStart", "cnstFanStart", 56, 4, AbiFieldKind.UInt32, "FanOut CSR 桶起点（桶数 = nodeCount，掩码同起点）"),
+        new AbiField("CnstIdxStart", "cnstIdxStart", 60, 4, AbiFieldKind.UInt32, "FanOut 算子下标池起点"),
+        new AbiField("CnstIdxCount", "cnstIdxCount", 64, 4, AbiFieldKind.UInt32, "下标池长度"),
+        new AbiField("LocalStart", "localStart", 68, 4, AbiFieldKind.UInt32, "LOCL 段内起点"),
+        new AbiField("LocalCount", "localCount", 72, 4, AbiFieldKind.UInt32, "localId 条目数（= nodeCount）"),
+        new AbiField("InstanceBytes", "instanceBytes", 76, 4, AbiFieldKind.UInt32, "实例块字节（内存计划是承诺不是估计，运行期断言 15）"),
+        new AbiField("SourceWidth", "sourceWidth", 80, 4, AbiFieldKind.Float32, "组件源宽"),
+        new AbiField("SourceHeight", "sourceHeight", 84, 4, AbiFieldKind.Float32, "组件源高"),
+        new AbiField("CtrlCount", "ctrlCount", 88, 2, AbiFieldKind.UInt16, "控制器数（M1 恒 0——BIND 归 M2 状态层）"),
+        new AbiField("Flags", "flags", 90, 2, AbiFieldKind.UInt16, "位域：bit0 有约束图 | bit1 有文本叶"),
+        new AbiField("Reserved", "_reserved", 92, 4, AbiFieldKind.Pad, "保留，写零（append-only：新字段从此切）"),
+    };
+
+    /// <summary>
+    /// CONT 记录：一个内容条目（<c>NodeTable.contentRef</c> 的目标）。降级阶梯的
+    /// 「组件级降回运行时 Extract」读的就是本段——编译器即运行时，故 Extract 需要的
+    /// 全部内容参数必须冻进 blob，否则降级路径无源可跑。
+    /// </summary>
+    public static readonly AbiField[] FgbContFields =
+    {
+        new AbiField("Kind", "kind", 0, 2, AbiFieldKind.UInt16, "0 = 无内容（哨兵 0 号记录）| 1 = 叶 | 2 = 孤岛（M1-23）"),
+        new AbiField("Blend", "blend", 2, 1, AbiFieldKind.UInt8, "BlendClass（段键四类）"),
+        new AbiField("Flags", "flags", 3, 1, AbiFieldKind.UInt8, "bit0 九宫格 | bit1 整图平铺 | bit2 开裁剪域 | bit3 文本叶"),
+        new AbiField("TexId", "texId", 4, 4, AbiFieldKind.UInt32, "段键纹理 id（0 = 纯色；与 TREF 同源）"),
+        new AbiField("BaseColor", "baseColor", 8, 4, AbiFieldKind.UInt32, "未乘 α 基色 RGBA8（颜色纯函数的定义域）"),
+        new AbiField("EmitFlags", "emitFlags", 12, 4, AbiFieldKind.UInt32, "发射器 flags"),
+        new AbiField("SlackHint", "slackHint", 16, 4, AbiFieldKind.Int32, "预留实例数下限（文本叶 = 有轮廓字形数 + 1，不依赖宽高）"),
+        new AbiField("TileGridIndice", "tileGridIndice", 20, 4, AbiFieldKind.UInt32, "九宫平铺位掩码（M1 发射面拒发，有声计数）"),
+        new AbiField("TextStr", "textStr", 24, 4, AbiFieldKind.UInt32, "文本串在 STRT 的下标（0 = 非文本）"),
+        new AbiField("FillPack", "fillPack", 28, 4, AbiFieldKind.UInt32, "填充参数打包：method:8 | origin:8 | clockwise:1"),
+        new AbiField("UvX0", "uvX0", 32, 4, AbiFieldKind.Float32, "UV xMin"),
+        new AbiField("UvY0", "uvY0", 36, 4, AbiFieldKind.Float32, "UV yMin"),
+        new AbiField("UvX1", "uvX1", 40, 4, AbiFieldKind.Float32, "UV xMax"),
+        new AbiField("UvY1", "uvY1", 44, 4, AbiFieldKind.Float32, "UV yMax"),
+        new AbiField("SourceWidth", "srcW", 48, 4, AbiFieldKind.Float32, "图元源宽（像素）"),
+        new AbiField("SourceHeight", "srcH", 52, 4, AbiFieldKind.Float32, "图元源高（像素）"),
+        new AbiField("GridX", "gridX", 56, 4, AbiFieldKind.Float32, "九宫格 x（源像素）"),
+        new AbiField("GridY", "gridY", 60, 4, AbiFieldKind.Float32, "九宫格 y"),
+        new AbiField("GridW", "gridW", 64, 4, AbiFieldKind.Float32, "九宫格 w"),
+        new AbiField("GridH", "gridH", 68, 4, AbiFieldKind.Float32, "九宫格 h"),
+        new AbiField("FillAmount", "fillAmount", 72, 4, AbiFieldKind.Float32, "填充完成比 [0,1]"),
+        new AbiField("Reserved", "_reserved", 76, 4, AbiFieldKind.Pad, "保留，写零"),
+    };
+
+    /// <summary>
+    /// LOCL 记录：localId ⇄ 编辑器 id 的冻结映射（M1-25 树查看器的 localId 路径、
+    /// M1-22 的 PTCH/BIND 按 nodeLocalId 寻址都吃它）。
+    /// </summary>
+    public static readonly AbiField[] FgbLocalFields =
+    {
+        new AbiField("LocalId", "localId", 0, 2, AbiFieldKind.UInt16, "模板局部 id（0 = 组件根）"),
+        new AbiField("Flags", "flags", 2, 2, AbiFieldKind.UInt16, "bit0 = GGroup 真节点化产生的组节点"),
+        new AbiField("EditorIdStr", "editorIdStr", 4, 4, AbiFieldKind.UInt32, "编辑器 id 在 STRT 的下标（0 = 无）"),
+        new AbiField("NameStr", "nameStr", 8, 4, AbiFieldKind.UInt32, "编辑器 name 在 STRT 的下标（0 = 无）"),
+        new AbiField("EditorIdHash", "editorIdHash", 12, 4, AbiFieldKind.UInt32, "编辑器 id 的 FNV-1a 32（陈旧可检测：arm 时比哈希链）"),
+    };
+
+    /// <summary>LEAF 记录：一个叶在冻结流里的落位（区间与 route 三分量）。</summary>
+    public static readonly AbiField[] FgbLeafFields =
+    {
+        new AbiField("LocalId", "localId", 0, 2, AbiFieldKind.UInt16, "叶节点的模板局部 id"),
+        new AbiField("TexSlot", "texSlot", 2, 2, AbiFieldKind.UInt16, "叶在所属段内的纹理槽"),
+        new AbiField("QuadStart", "quadStart", 4, 4, AbiFieldKind.UInt32, "首实例（**组件内相对**下标）"),
+        new AbiField("QuadCount", "quadCount", 8, 4, AbiFieldKind.UInt32, "在用实例数"),
+        new AbiField("QuadSlack", "quadSlack", 12, 4, AbiFieldKind.UInt32, "预留实例数（写区间上界，≥ quadCount）"),
+        new AbiField("Segment", "segment", 16, 4, AbiFieldKind.UInt32, "所属段（组件内相对）"),
+        new AbiField("Run", "run", 20, 4, AbiFieldKind.UInt32, "所属 run（组件内相对）"),
+        new AbiField("ClipEntry", "clipEntry", 24, 4, AbiFieldKind.UInt32, "裁剪条目（组件内相对；0 = 不裁剪）"),
+        new AbiField("Slot", "slot", 28, 4, AbiFieldKind.UInt32, "transform 槽（0 = identity；实例化时 arm 重认领）"),
+        new AbiField("ContentRef", "contentRef", 32, 4, AbiFieldKind.UInt32, "CONT 下标（canonical id：同内容必同 id）"),
+        new AbiField("EmitFlags", "emitFlags", 36, 4, AbiFieldKind.UInt32, "发射器 flags"),
+    };
+
+    /// <summary>SEGS 记录：一个段（≤4 纹理 × blendClass 的段键 + 实例区间）。</summary>
+    public static readonly AbiField[] FgbSegFields =
+    {
+        new AbiField("Tex0", "tex0", 0, 4, AbiFieldKind.UInt32, "纹理槽 0"),
+        new AbiField("Tex1", "tex1", 4, 4, AbiFieldKind.UInt32, "纹理槽 1"),
+        new AbiField("Tex2", "tex2", 8, 4, AbiFieldKind.UInt32, "纹理槽 2"),
+        new AbiField("Tex3", "tex3", 12, 4, AbiFieldKind.UInt32, "纹理槽 3"),
+        new AbiField("TexCount", "texCount", 16, 1, AbiFieldKind.UInt8, "在用纹理槽数（≤ SegmentMaxTextures）"),
+        new AbiField("Blend", "blend", 17, 1, AbiFieldKind.UInt8, "BlendClass（进段键，不是栅栏）"),
+        new AbiField("Reserved", "_reserved", 18, 2, AbiFieldKind.Pad, "保留，写零"),
+        new AbiField("QuadStart", "quadStart", 20, 4, AbiFieldKind.UInt32, "首实例（组件内相对）"),
+        new AbiField("QuadCount", "quadCount", 24, 4, AbiFieldKind.UInt32, "实例数"),
+        new AbiField("Run", "run", 28, 4, AbiFieldKind.UInt32, "所属 run（组件内相对）"),
+    };
+
+    /// <summary>TREF 记录：纹理/声音符号引用（装载期绑定为句柄，机制 2 的「绑定」那一步）。</summary>
+    public static readonly AbiField[] FgbTexRefFields =
+    {
+        new AbiField("PkgId", "pkgId", 0, 8, AbiFieldKind.UInt64, "包 id 字符串的 FNV-1a 64（本包引用 = 自身 id）"),
+        new AbiField("ItemStr", "itemStr", 8, 4, AbiFieldKind.UInt32, "图集条目 id 在 STRT 的下标"),
+        new AbiField("Kind", "kind", 12, 2, AbiFieldKind.UInt16, "0 = 纹理（声音/骨骼按 append-only 续编号）"),
+        new AbiField("TexId", "texId", 14, 2, AbiFieldKind.UInt16, "段键纹理 id（包内分配序；QUAD 段键与本表同源）"),
+    };
+
+    /// <summary>STRT 段头（不可变字符串表；LANG 补丁段视图叠加不改本段）。</summary>
+    public static readonly AbiField[] FgbStrtHeaderFields =
+    {
+        new AbiField("Count", "count", 0, 4, AbiFieldKind.UInt32, "条目数（下标 0 = 空串哨兵）"),
+        new AbiField("PoolBytes", "poolBytes", 4, 4, AbiFieldKind.UInt32, "UTF-8 池字节数"),
+        new AbiField("Reserved", "_reserved", 8, 8, AbiFieldKind.Pad, "保留，写零（凑 16B 使条目数组自然对齐）"),
+    };
+
+    /// <summary>STRT 条目：UTF-8 池内的窗口。</summary>
+    public static readonly AbiField[] FgbStrtEntryFields =
+    {
+        new AbiField("Offset", "offset", 0, 4, AbiFieldKind.UInt32, "池内字节偏移"),
+        new AbiField("Length", "length", 4, 4, AbiFieldKind.UInt32, "字节长（UTF-8）"),
+    };
+
+    /// <summary>
+    /// CNST 段头：四段数组的总长（算子 / FanOut 桶 / 下标池 / 归属掩码）。
+    /// 组件的各自区间在 COMP 上；本头只回答「这段一共有多少条」，读侧据此切片。
+    /// </summary>
+    public static readonly AbiField[] FgbCnstHeaderFields =
+    {
+        new AbiField("OpCount", "opCount", 0, 4, AbiFieldKind.UInt32, "ConstraintOp 总条数（8B/条）"),
+        new AbiField("FanCount", "fanCount", 4, 4, AbiFieldKind.UInt32, "FanOut 桶总数（4B/条；= 各组件 nodeCount 之和）"),
+        new AbiField("IndexCount", "indexCount", 8, 4, AbiFieldKind.UInt32, "FanOut 算子下标池长度（2B/条）"),
+        new AbiField("MaskCount", "maskCount", 12, 4, AbiFieldKind.UInt32, "布局归属掩码字节数（1B/节点；= fanCount）"),
+    };
+
+    /// <summary>
+    /// FGB 定长记录清单（M1-20b）。生成物按本表出 <c>Fgb{Name}Size</c> 与
+    /// <c>Fgb{Name}{Field}Offset/Size</c> 常量 + 编译期首尾相接断言 + Verify 交叉校验。
+    /// **append-only**：记录只在表尾追加，字段只从各自保留区切。
+    /// </summary>
+    public static readonly AbiRecord[] FgbRecords =
+    {
+        new AbiRecord("Comp", 96, FgbCompFields, "COMP 记录（组件模板的全段区间）"),
+        new AbiRecord("Cont", 80, FgbContFields, "CONT 记录（内容条目 = contentRef 的目标）"),
+        new AbiRecord("Local", 16, FgbLocalFields, "LOCL 记录（localId ⇄ 编辑器 id）"),
+        new AbiRecord("Leaf", 40, FgbLeafFields, "LEAF 记录（叶在冻结流里的落位）"),
+        new AbiRecord("Seg", 32, FgbSegFields, "SEGS 记录（段键 + 实例区间）"),
+        new AbiRecord("TexRef", 16, FgbTexRefFields, "TREF 记录（纹理符号引用）"),
+        new AbiRecord("StrtHeader", 16, FgbStrtHeaderFields, "STRT 段头"),
+        new AbiRecord("StrtEntry", 8, FgbStrtEntryFields, "STRT 条目"),
+        new AbiRecord("CnstHeader", 16, FgbCnstHeaderFields, "CNST 段头（四段数组总长）"),
     };
 }

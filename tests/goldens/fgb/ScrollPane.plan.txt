@@ -1,0 +1,30 @@
+memory-plan blob=6640B sections=11 components=5
+  section STRT 511B strings=32 pool=239B
+  section TREF 16B records=1×16B
+  section COMP 480B records=5×96B
+  section NODE 1928B nodes=22 cols=21 bytesPerNode=80
+  section CONT 880B records=11×80B
+  section LOCL 352B records=22×16B
+  section CNST 240B ops=11
+  section QUAD 1120B records=14×80B
+  section SEGS 128B records=4×32B
+  section LEAF 400B records=10×40B
+  section CLIP 240B records=5×48B
+  component Box nodes=2 quads=0 segs=0 leaves=0 clips=1 ops=2 slots=1 instanceBytes=16 pool=176B
+  component item nodes=8 quads=4 segs=1 leaves=4 clips=1 ops=7 slots=6 instanceBytes=16 pool=656B
+  component Button1 nodes=3 quads=2 segs=1 leaves=2 clips=1 ops=0 slots=0 instanceBytes=16 pool=256B
+  component Button2 nodes=3 quads=3 segs=1 leaves=2 clips=1 ops=0 slots=0 instanceBytes=16 pool=256B
+  component Main nodes=6 quads=5 segs=1 leaves=2 clips=1 ops=2 slots=3 instanceBytes=16 pool=496B
+  pool-budget total=1840B nodes=22 nodeBytes=1760B
+  canonical strings=32/57 content=11/11 texrefs=1/1
+  mask observable=0/64 (BIND 未进 M1 编译面) Layout=2/63 Visual=5/32 Text=2/32 Transform=7/32
+abi   QuadInstance 80B rect@0 uvA@16 uvB@32 color@48 route@52 flags@56 aux@60 extra@64
+abi   NodeRecord 80B cols=21
+topo  Box  #0 n3.XSize=FollowDelta(<root>.Size) → #1 n3.YSize=FollowDelta(<root>.Size)
+bind  Box  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  item  #0 n3.XSize=FollowDelta(<root>.Size) → #1 n3.YMax=FollowDelta(<root>.Max) → #2 n9.XMin=FollowDelta(<root>.Max) → #3 n10.XMin=FollowDelta(<root>.Max) → #4 n4.XSize=FollowDelta(<root>.Size) → #5 n5.XSize=FollowDelta(<root>.Size) → #6 n6.XMax=FollowDelta(<root>.Max)
+bind  item  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
+topo  Button1  (无关系)
+topo  Button2  (无关系)
+topo  Main  #0 n0.YSize=FollowDelta(<root>.Size) → #1 n1.YSize=FollowDelta(<root>.Size)
+bind  Main  (BIND 未进 M1 编译面：gear/controller 归 M2 状态层)
