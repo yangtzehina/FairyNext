@@ -199,7 +199,7 @@ public readonly struct ExtractReport
 /// 一个实例服务**一条流 = 一个面板**。Structure 通道一帧里可能收到几十条句柄，
 /// 它们全部折叠成**一次**重编——面板是重编的粒度，句柄只是「这个面板脏了」的证据。
 /// </summary>
-public sealed class Extract : IChannelDrain
+public sealed class Extract : IChannelDrain, Events.IHitClipSource
 {
     private readonly RenderStream _stream;
     private readonly NodeTable _table;
@@ -291,6 +291,35 @@ public sealed class Extract : IChannelDrain
             else ForeignMarks++;
         }
         if (mine) Rebuild();
+    }
+
+    // ── 裁剪域的只读消费面（M1-21：命中侧与渲染剔除同源）──────────────────
+    //
+    // 命中测试不许自己维护第二份裁剪账。14b-4 的死字段裁决把 worldVisual 的 clip 域
+    // 判成保留段恒零并删了取值宏，正是为了让「想读 clip 域的代码在编译期就被迫走 Extract」；
+    // 这两个方法就是那条唯一通道。读到的是**上一次整流重编**留下的域图——与命中读上帧
+    // paintOrder 是同一条纪律（重编之后新挂上来的节点在图里是 NoneEntry，它本帧也没被画）。
+
+    /// <inheritdoc/>
+    public int ClipEntryOf(uint nodeIndex) =>
+        nodeIndex < (uint)_clipOf.Length ? _clipOf[nodeIndex] : ClipBook.NoneEntry;
+
+    /// <summary>节点所在的裁剪域条目（句柄版）。</summary>
+    public int ClipEntryOf(NodeHandle node) =>
+        _table.TryResolve(node, out uint i) ? ClipEntryOf(i) : ClipBook.NoneEntry;
+
+    /// <inheritdoc/>
+    public bool TryGetClipWindow(int entry, out Vector4 rect, out Affine2D slotFrame)
+    {
+        rect = default;
+        slotFrame = Affine2D.Identity;
+        if (entry == ClipBook.NoneEntry) return false;
+        int resolved = _stream.Clips.Resolve(entry);
+        if (resolved == ClipBook.NoneEntry) return false;
+        rect = _stream.Clips.Entry(resolved).Rect;
+        int slot = _stream.Clips.Share(resolved).Slot;
+        if (slot != SlotTable.IdentitySlot) slotFrame = _stream.Slots.Matrix(slot);
+        return true;
     }
 
     /// <summary>句柄是否在本面板子树内（paintOrder 的子树区间是连续的，判断是两次比较）。</summary>

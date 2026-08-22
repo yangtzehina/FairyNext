@@ -367,8 +367,86 @@ namespace Somewhere
             Check("g14.归属表不与 Ch 同命名空间报 FNP008", far.Has("FNP008"), far.Ids);
         }
 
+        // ── e1（M1-21）：EventCtx 逃逸必须是**编译错**，不是文档警告 ────────────────
+        //
+        // 事件·不变量 1【编译错】的执法点。它落在这里而不是主 runner，理由与本工程存在的理由相同：
+        // 判定「某段源码编译不过、且报的是那个错号」需要 Roslyn，而主 runner 是零 NuGet 工程。
+        // 编译对象是**真实的 FairyNext.Core 程序集**（不是 stub）：stub 只能证明 C# 编译器会拦
+        // ref struct 逃逸，证明不了 EventCtx 真的是 ref struct。
+        EventCtxEscapeGate();
+
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         Console.Write(Log.ToString());
         Environment.Exit(_fail == 0 ? 0 : 1);
+    }
+
+    /// <summary>
+    /// 事件·不变量 1：<c>EventCtx</c> 存字段 = CS8345、被闭包捕获 = CS1628，正例零错误。
+    /// 找不到已构建的 FairyNext.Core.dll 时**有声跳过**（同 M1-17 的 Monaco golden 纪律：
+    /// 缺资产不假装通过，也不把整套门拖红）。
+    /// </summary>
+    private static void EventCtxEscapeGate()
+    {
+        string core = FindCoreAssembly();
+        if (core == null)
+        {
+            Check("e1.SKIP（未找到 FairyNext.Core.dll，先 dotnet build 再跑本门）", true);
+            return;
+        }
+
+        string dir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+        string coreDir = Path.GetDirectoryName(core);
+        var refs = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            MetadataReference.CreateFromFile(Path.Combine(dir, "System.Runtime.dll")),
+            MetadataReference.CreateFromFile(Path.Combine(dir, "netstandard.dll")),
+            MetadataReference.CreateFromFile(core),
+        };
+        foreach (string dep in new[] { "FairyNext.Numerics.dll", "FairyNext.Contracts.dll", "FairyNext.State.dll" })
+        {
+            string p = Path.Combine(coreDir, "..", "..", dep.Replace(".dll", ""), Path.GetFileName(coreDir), dep);
+            if (File.Exists(p)) refs.Add(MetadataReference.CreateFromFile(Path.GetFullPath(p)));
+        }
+
+        const string stored = @"
+using FairyNext.Core.Events;
+public class Bad { private EventCtx _kept; public void Keep(ref EventCtx c) { _kept = c; } }";
+        const string captured = @"
+using FairyNext.Core.Events;
+public class Bad2 { public System.Action Cap(ref EventCtx c) { return () => c.StopPropagation(); } }";
+        const string good = @"
+using FairyNext.Core.Events;
+public class Fine { public void Handle(ref EventCtx c, in PointerInput p) { c.StopPropagation(); } }";
+
+        Check("e1.EventCtx 存字段报 CS8345（ref struct 不能作字段类型）",
+            ErrorsOf(stored, refs).Contains("CS8345"), ErrorsOf(stored, refs));
+        Check("e1.EventCtx 被闭包捕获报 CS1628（ref 参数不进匿名函数）",
+            ErrorsOf(captured, refs).Contains("CS1628"), ErrorsOf(captured, refs));
+        Check("e1.正常的 handler 形态零错误", ErrorsOf(good, refs).Length == 0, ErrorsOf(good, refs));
+    }
+
+    private static string ErrorsOf(string source, List<MetadataReference> refs)
+    {
+        var comp = CSharpCompilation.Create("EventCtxGate",
+            new[] { CSharpSyntaxTree.ParseText(source, path: "Escape.cs") }, refs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return string.Join("; ", comp.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .Select(d => d.Id + ":" + d.GetMessage()));
+    }
+
+    /// <summary>自本程序集所在目录向上找 <c>artifacts/bin/FairyNext.Core/&lt;cfg&gt;/FairyNext.Core.dll</c>。</summary>
+    private static string FindCoreAssembly()
+    {
+        var here = new DirectoryInfo(AppContext.BaseDirectory);
+        string cfg = here.Name;                                   // debug / release
+        for (DirectoryInfo d = here; d != null; d = d.Parent)
+        {
+            if (!string.Equals(d.Name, "bin", StringComparison.OrdinalIgnoreCase)) continue;
+            string p = Path.Combine(d.FullName, "FairyNext.Core", cfg, "FairyNext.Core.dll");
+            if (File.Exists(p)) return p;
+        }
+        return null;
     }
 }

@@ -71,6 +71,10 @@ public static partial class Program
                              // 逐字节，六包 25 组件）**、**FGB 读回 sanity（NODE/COMP/CNST/LOCL/
                              // STRT/LEAF 逐段与原树对账）**；另有 canonical 后置扫描（不变量 8）、
                              // 内存计划断言锚、冻结前置门 FGM903，用例在 CompilerFreezeTests.cs（partial）
+        EventSuite();        // M1-21 事件平面：命中（迭代下行 / 上帧序 / local⊗slotMatrix / clip 剪枝 /
+                             // 1bit 位图）+ 链快照派发与句柄双验 + downChain click + CaptureTouch/monitor
+                             // + P0 接线与相位纪律；另结两笔 2026-08 审计遗留账（DownLayer 覆盖与裁决、
+                             // 命中/渲染 clip 同判），用例在 EventTests.cs（partial）
 
         Console.WriteLine($"RESULT pass={_pass} fail={_fail}");
         return _fail == 0 ? 0 : 1;

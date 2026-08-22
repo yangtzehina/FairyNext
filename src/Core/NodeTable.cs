@@ -165,6 +165,18 @@ public sealed partial class NodeTable
     /// </summary>
     internal Action<uint, WriteSource>? ReattachHook { get; set; }
 
+    /// <summary>
+    /// 节点销毁钩子（M1-21 事件平面接缝 <c>OnNodeDisposed</c>）：<see cref="EndFrame"/> 在
+    /// **换代之前**对每个本帧被标记即死的节点调一次，参数是表内下标。
+    ///
+    /// 为什么在 P9 而不是在 <see cref="Destroy"/> 那一刻：标记即死之后、换代之前，节点仍要
+    /// 对同帧尚在进行的事件链保持「解引用必失败」的可辨认状态；监听块若在 Destroy 当场归还，
+    /// 同帧后续派发就会读到一个已经被别的节点占用的块。走下标而不是句柄，是因为此刻
+    /// <see cref="TryResolve"/> 按契约必然失败。**独占**：接管者自己检查重复接管
+    /// （同 M1-14b 的 Attach 硬独占）。
+    /// </summary>
+    internal Action<uint>? NodeDisposedHook { get; set; }
+
     /// <summary>建表并创建根节点。</summary>
     /// <param name="tree">树域 id。</param>
     /// <param name="initialCapacity">初始槽数（含保留槽 0）；之后按 2 倍扩容。</param>
@@ -288,6 +300,7 @@ public sealed partial class NodeTable
         for (int k = 0; k < _pendingCount; k++)
         {
             uint idx = _pending[k];
+            NodeDisposedHook?.Invoke(idx);      // 换代之前：侧表按下标归还（句柄此刻必然解引用失败）
             ushort g = (ushort)(_gen[idx] + 1);
             if (g == 0) g = 1;
             _gen[idx] = g;
@@ -480,6 +493,12 @@ public sealed partial class NodeTable
 
     /// <summary>类型 id 的下标读。</summary>
     internal ushort TypeAt(uint index) => _typeId[index];
+
+    /// <summary>localVisual 原字的下标读（命中测试的 visible/touchable 位门直读本列）。</summary>
+    internal uint LocalVisualAt(uint index) => _localVisual[index];
+
+    /// <summary>局部矩阵的下标读（命中下行逐级求逆；公式仍是唯一那一份）。</summary>
+    internal Affine2D LocalMatrixAt(uint index) => LocalMatrixCore(index);
 
     /// <summary>下标是否指向活槽（下标路径的 DEAD 校验；句柄路径仍走 <see cref="TryResolve"/>）。</summary>
     internal bool IsIndexAlive(uint index) =>

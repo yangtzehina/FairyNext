@@ -111,6 +111,16 @@ public sealed partial class NodeTable
     public uint PaintIndexOf(NodeHandle h) => TryResolve(h, out uint i) ? _paintIndex[i] : NotInTree;
 
     /// <summary>
+    /// paintOrder 反查的下标版（命中测试沿**上帧收敛的序**下行，每步句柄化太贵）。
+    /// 上次 <see cref="ApplyStructure"/> 之后新建/重接的节点在这里读到 <see cref="NotInTree"/>
+    /// 或旧位置——那正是「当帧新建节点当帧不可命中」这条明文契约的存储形态。
+    /// </summary>
+    internal uint PaintIndexAt(uint index) => _paintIndex[index];
+
+    /// <summary>子树在 paintOrder 中的排他终点（与 <see cref="PaintIndexAt"/> 同一次收敛的快照）。</summary>
+    internal uint PaintEndAt(uint index) => _paintEnd[index];
+
+    /// <summary>
     /// 子树在 paintOrder 中的连续区间（DFS 前序使子树天然连续）。
     /// 序已定形时是 O(1)（读切片表 <c>paintEnd</c>）；未定形时退回走一遍当前树——
     /// 后者的 count 描述的是**新**树而 start 来自**旧**序，只可作粗判（Extract 的面板归属过滤按此用）。
